@@ -1,8 +1,7 @@
 """cc-cursor-bridge hook dispatcher.
 
-Logs every Claude Code hook event, denies dangerous tool calls, and leaves a
-local pending/replies channel plus a notifier call site. No third-party
-packages and no network calls.
+Logs every Claude Code hook event, denies dangerous tool calls, and routes
+each event to wait, push, or log. No third-party packages and no network calls.
 """
 
 from __future__ import annotations
@@ -97,6 +96,53 @@ def default_rules() -> List[dict]:
     ]
 
 
+MODES = ("wait", "push", "log", "off")
+# SessionStart stays synchronous so CC_BRIDGE_WATCH can inject watchPaths.
+# WorktreeCreate stays synchronous because it must print the worktree path.
+SYNC_WITHOUT_WAIT = ("SessionStart", "WorktreeCreate")
+DEFAULT_EVENT_MODES = {
+    "SessionStart": "push",
+    "Setup": "log",
+    "InstructionsLoaded": "log",
+    "UserPromptSubmit": "push",
+    "UserPromptExpansion": "push",
+    "MessageDisplay": "log",
+    "PreToolUse": "wait",
+    "PermissionRequest": "wait",
+    "PermissionDenied": "log",
+    "PostToolUse": "push",
+    "PostToolUseFailure": "push",
+    "PostToolBatch": "log",
+    "Notification": "log",
+    "SubagentStart": "log",
+    "SubagentStop": "push",
+    "TaskCreated": "push",
+    "TaskCompleted": "push",
+    "Stop": "wait",
+    "StopFailure": "push",
+    "TeammateIdle": "push",
+    "ConfigChange": "log",
+    "CwdChanged": "log",
+    "DirectoryAdded": "log",
+    "FileChanged": "log",
+    "WorktreeCreate": "push",
+    "WorktreeRemove": "log",
+    "PreCompact": "push",
+    "PostCompact": "log",
+    "PreModelSwitch": "push",
+    "PostModelSwitch": "log",
+    "Elicitation": "wait",
+    "ElicitationResult": "log",
+    "SessionEnd": "log",
+}
+
+
+def hook_runs_async(event_name: str) -> bool:
+    if event_name in SYNC_WITHOUT_WAIT:
+        return False
+    return DEFAULT_EVENT_MODES.get(event_name) in ("push", "log")
+
+
 def default_config() -> dict:
     return {
         "notifier": {
@@ -132,6 +178,8 @@ def default_config() -> dict:
             "command_chars": 4000,
             "content_chars": 2000,
         },
+        "stop": {"max_blocks": 3},
+        "events": dict(DEFAULT_EVENT_MODES),
     }
 
 
@@ -173,7 +221,7 @@ def load_config(root: Path, environ: dict) -> Tuple[dict, str]:
         return cfg, f"配置文件无法解析，已回退到内置配置: {exc}"
     if not isinstance(data, dict):
         return cfg, "配置文件不是对象，已回退到内置配置"
-    for key in ("notifier", "wait", "wait_all", "log", "pending"):
+    for key in ("notifier", "wait", "wait_all", "log", "pending", "stop", "events"):
         if isinstance(data.get(key), dict):
             cfg[key].update(data[key])
     return cfg, ""
@@ -650,6 +698,65 @@ def wait_all_settings(cfg: dict, environ: dict) -> dict:
     return block
 
 
+def resolve_event_mode(event_name: str, cfg: dict, environ: dict) -> str:
+    """wait_all forces every event to wait. Otherwise env, then config, then the built-in plan."""
+    if wait_all_settings(cfg, environ).get("enabled"):
+        return "wait"
+    raw = str(environ.get(f"CC_BRIDGE_EVENT_MODE_{event_name}") or "").strip().lower()
+    if raw in MODES:
+        return raw
+    configured = (cfg.get("events") or {}).get(event_name)
+    if isinstance(configured, str) and configured.strip().lower() in MODES:
+        return configured.strip().lower()
+    return DEFAULT_EVENT_MODES.get(event_name, "log")
+
+
+def stop_block_limit(cfg: dict, environ: dict) -> int:
+    raw = str(environ.get("CC_BRIDGE_STOP_MAX_BLOCKS") or "").strip()
+    if raw.isdigit():
+        return int(raw)
+    try:
+        return max(0, int((cfg.get("stop") or {}).get("max_blocks", 3)))
+    except (TypeError, ValueError):
+        return 3
+
+
+def read_stop_blocks(task_dir: Path) -> int:
+    path = task_dir / "stop-blocks"
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return 0
+    return int(raw) if raw.isdigit() else 0
+
+
+def increment_stop_blocks(task_dir: Path) -> int:
+    task_dir.mkdir(parents=True, exist_ok=True)
+    path = task_dir / "stop-blocks"
+    with path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            handle.seek(0)
+            raw = handle.read().strip()
+            current = int(raw) if raw.isdigit() else 0
+            nxt = current + 1
+            handle.seek(0)
+            handle.truncate()
+            handle.write(str(nxt))
+            handle.flush()
+            os.fsync(handle.fileno())
+            return nxt
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def write_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.parent / (path.name + ".tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
+
+
 def reserve_seq(task_dir: Path) -> int:
     task_dir.mkdir(parents=True, exist_ok=True)
     path = task_dir / "seq"
@@ -724,7 +831,34 @@ def timeout_result(event_name: str) -> Tuple[str, int, str, str]:
             }
         }
         return json.dumps(body, ensure_ascii=False) + "\n", 0, "", "timeout-deny"
+    if event_name == "Elicitation":
+        body = {"hookSpecificOutput": {"hookEventName": "Elicitation", "action": "decline"}}
+        return json.dumps(body, ensure_ascii=False) + "\n", 0, "", "timeout-decline"
+    if event_name == "Stop":
+        return "", 0, "", "timeout-allow-stop"
     return "", 0, "", "timeout-noop"
+
+
+def apply_stop_reply(
+    event: dict, reply: Optional[dict], task_dir: Path, cfg: dict, environ: dict
+) -> Tuple[str, int, str, str, str]:
+    """Block only on an explicit decision. stop_hook_active without one lets the turn end.
+
+    A task can be blocked at most stop.max_blocks times (default 3). After that, let it stop.
+    """
+    active = bool(event.get("stop_hook_active"))
+    explicit = isinstance(reply, dict) and str(reply.get("decision") or "").lower() == "block"
+    reason = str((reply or {}).get("reason") or (reply or {}).get("message") or "")
+    if not explicit:
+        label = "stop-hook-active" if active else "ack"
+        return "", 0, "", label, ""
+    limit = stop_block_limit(cfg, environ)
+    used = read_stop_blocks(task_dir)
+    if used >= limit:
+        return "", 0, "", "stop-block-cap", f"已阻断 {used} 次，达到上限 {limit}，放行结束"
+    increment_stop_blocks(task_dir)
+    answered, code, extra, decision = apply_reply("Stop", reply or {})
+    return answered, code, extra, decision, reason or "blocked"
 
 
 def apply_reply(event_name: str, reply: dict) -> Tuple[str, int, str, str]:
@@ -1013,6 +1147,65 @@ def pending_tool_view(tool_input: dict, cfg: dict, secrets: List[str], full: boo
     return view, truncated
 
 
+def notice_body(
+    seq: int,
+    event_name: str,
+    event: dict,
+    tool_name: str,
+    tool_input: dict,
+    summary: dict,
+    cfg: dict,
+    secrets: List[str],
+    stdout: str,
+) -> Tuple[dict, dict, bool]:
+    short_input, was_truncated = pending_tool_view(tool_input, cfg, secrets, full=False)
+    full_input, _ = pending_tool_view(tool_input, cfg, secrets, full=True)
+    body = {
+        "seq": seq,
+        "event": event_name,
+        "session_id": event.get("session_id") or "",
+        "cwd": event.get("cwd") or "",
+        "tool_name": tool_name,
+        "tool_input": short_input,
+        "summary": summary,
+        "input_keys": sorted(str(key) for key in event.keys()),
+        "reply_hint": reply_hint(event_name),
+        "created_at": local_iso(),
+    }
+    if "stop_hook_active" in event:
+        body["stop_hook_active"] = bool(event.get("stop_hook_active"))
+    if was_truncated:
+        body["truncated"] = True
+    if event_name == "WorktreeCreate" and stdout.strip():
+        body["worktreePath"] = stdout.strip()
+    return body, full_input, was_truncated
+
+
+def write_notice(directory: Path, kind: str, seq: int, event_name: str, body: dict, full_input: dict, was_truncated: bool) -> None:
+    payload = dict(body)
+    if was_truncated:
+        payload["full_file"] = f"{kind}/{seq}-{event_name}.full.json"
+    path = directory / kind / f"{seq}-{event_name}.json"
+    write_atomic(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    if was_truncated:
+        full_body = dict(payload)
+        full_body["tool_input"] = full_input
+        full_body["truncated"] = False
+        full_path = directory / kind / f"{seq}-{event_name}.full.json"
+        write_atomic(full_path, json.dumps(full_body, ensure_ascii=False, indent=2) + "\n")
+    if kind == "push":
+        stream = directory / "push" / "stream.jsonl"
+        stream.parent.mkdir(parents=True, exist_ok=True)
+        with stream.open("a", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def pending_input(tool_input: dict, limit: int, secrets: List[str]) -> dict:
     view: Dict[str, Any] = {}
     for key, value in tool_input.items():
@@ -1121,6 +1314,15 @@ def handle_event(
     if notes:
         summary["config_note"] = truncate(" ".join(notes), limit, secrets)
 
+    mode = resolve_event_mode(event_name, cfg, environ)
+    watch = watch_paths_from_env(environ)
+    wait_all = wait_all_settings(cfg, environ)
+    if event_name == "SessionStart" and watch and mode == "wait" and not wait_all.get("enabled"):
+        mode = "push"
+        summary["session_start"] = "sync-without-wait"
+    if mode == "off" and event_name not in ("PreToolUse", "WorktreeCreate", "WorktreeRemove", "SessionStart"):
+        return HookResult()
+
     if event_name == "WorktreeCreate":
         path, error = create_worktree(cwd, str(event.get("name") or "worktree"))
         if path:
@@ -1144,7 +1346,6 @@ def handle_event(
         "home": home,
         "rule_errors": [],
     }
-    wait_all = wait_all_settings(cfg, environ)
     if event_name == "PreToolUse":
         matched = first_deny(rules, ctx)
         if matched:
@@ -1171,76 +1372,73 @@ def handle_event(
     elif probe_stdout is not None:
         summary["probe"] = "ignored_for_worktree_protocol"
 
+    if mode == "off" and event_name == "PreToolUse" and not rule_id and decision != "probe":
+        return HookResult()
+    if mode == "off" and event_name == "SessionStart" and not watch and decision != "probe":
+        return HookResult()
+
     directory = task_dir_for(event, environ)
-    if probe_stdout is None and not rule_id and wait_all.get("enabled"):
-        seq = reserve_seq(directory)
-        pending_id = str(seq)
-        short_input, was_truncated = pending_tool_view(tool_input, cfg, secrets, full=False)
-        full_input, _ = pending_tool_view(tool_input, cfg, secrets, full=True)
-        pending_body = {
-            "seq": seq,
-            "event": event_name,
-            "session_id": event.get("session_id") or "",
-            "cwd": event.get("cwd") or "",
-            "tool_name": tool_name,
-            "tool_input": short_input,
-            "summary": summary,
-            "input_keys": sorted(str(key) for key in event.keys()),
-            "reply_file": f"replies/{seq}.json",
-            "reply_hint": reply_hint(event_name),
-            "created_at": local_iso(),
-        }
-        if was_truncated:
-            pending_body["truncated"] = True
-            pending_body["full_file"] = f"pending/{seq}-{event_name}.full.json"
-        if event_name == "WorktreeCreate" and stdout.strip():
-            pending_body["worktreePath"] = stdout.strip()
-        pending_path = directory / "pending" / f"{seq}-{event_name}.json"
-        pending_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = pending_path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(pending_body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        temporary.replace(pending_path)
-        if was_truncated:
-            full_body = dict(pending_body)
-            full_body["tool_input"] = full_input
-            full_body["truncated"] = False
-            full_path = directory / "pending" / f"{seq}-{event_name}.full.json"
-            full_tmp = full_path.with_suffix(".tmp")
-            full_tmp.write_text(json.dumps(full_body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            full_tmp.replace(full_path)
-        reply, via = poll_reply_file(
-            directory / "replies" / f"{seq}.json",
-            float(wait_all.get("timeout_seconds", 120)),
-            float(wait_all.get("poll_interval_seconds", 0.25)),
+    seq = reserve_seq(directory)
+    pending_id = ""
+    push_id = ""
+    summary["channel"] = mode
+    blocked_by_probe = probe_stdout is not None and event_name not in ("WorktreeCreate", "WorktreeRemove")
+    if not rule_id and not blocked_by_probe and mode in ("wait", "push"):
+        body, full_input, was_truncated = notice_body(
+            seq, event_name, event, tool_name, tool_input, summary, cfg, secrets, stdout
         )
-        summary["wait_all"] = via
-        if reply is None:
-            timed_out, code, extra, decision = timeout_result(event_name)
-            if event_name == "WorktreeCreate" and stdout.strip() and decision == "timeout-noop":
-                pass
-            else:
-                stdout = timed_out
-            if extra:
-                stderr += extra
-            reason = "等待回复超时" if decision == "timeout-deny" else ""
-        else:
-            answered, code, extra, decision = apply_reply(event_name, reply)
-            if extra:
-                stderr += extra
-            if event_name == "WorktreeCreate" and decision != "path":
-                pass
-            else:
+        if mode == "wait":
+            body["reply_file"] = f"replies/{seq}.json"
+            pending_id = str(seq)
+            write_notice(directory, "pending", seq, event_name, body, full_input, was_truncated)
+            reply, via = poll_reply_file(
+                directory / "replies" / f"{seq}.json",
+                float(wait_all.get("timeout_seconds", 120)),
+                float(wait_all.get("poll_interval_seconds", 0.25)),
+            )
+            if wait_all.get("enabled"):
+                summary["wait_all"] = via
+            summary["delivery"] = via
+            if reply is None:
+                timed_out, code, extra, decision = timeout_result(event_name)
+                keep_worktree = event_name == "WorktreeCreate" and stdout.strip() and decision in (
+                    "timeout-noop",
+                    "timeout-allow-stop",
+                )
+                if not keep_worktree:
+                    stdout = timed_out
+                if extra:
+                    stderr += extra
+                if decision in ("timeout-deny", "timeout-decline"):
+                    reason = "等待回复超时"
+            elif event_name == "Stop":
+                answered, code, extra, decision, reason = apply_stop_reply(event, reply, directory, cfg, environ)
+                if extra:
+                    stderr += extra
                 stdout = answered
-            reason = str(reply.get("reason") or reply.get("message") or "")
-        record_seq = seq
-    else:
-        record_seq = 0
+            else:
+                answered, code, extra, decision = apply_reply(event_name, reply)
+                if extra:
+                    stderr += extra
+                if not (event_name == "WorktreeCreate" and decision != "path"):
+                    stdout = answered
+                reason = str(reply.get("reason") or reply.get("message") or "")
+        else:
+            push_id = str(seq)
+            write_notice(directory, "push", seq, event_name, body, full_input, was_truncated)
+            summary["delivery"] = "push"
+    if rule_id:
+        summary["delivery"] = "rule"
 
     wait = wait_settings(cfg, environ)
-    if probe_stdout is None and not wait_all.get("enabled") and should_wait(event_name, wait, decision == "deny"):
+    if (
+        probe_stdout is None
+        and mode == "log"
+        and not rule_id
+        and should_wait(event_name, wait, decision == "deny")
+    ):
         pending_id = safe_file_id(str(event.get("tool_use_id") or ""))
-        directory = task_dir_for(event, environ)
-        pending_body = {
+        legacy = {
             "id": pending_id,
             "event": event_name,
             "session_id": event.get("session_id") or "",
@@ -1248,22 +1446,25 @@ def handle_event(
             "tool_input": pending_input(tool_input, max(limit, 400), secrets),
             "created_at": local_iso(),
         }
-        decision, reason, via = wait_for_reply(directory, pending_id, pending_body, wait)
+        decision, reason, via = wait_for_reply(directory, pending_id, legacy, wait)
         summary["wait"] = via
+        summary["delivery"] = via
         stdout = decision_stdout(event_name, decision, reason)
 
+    if "delivery" not in summary:
+        summary["delivery"] = mode
     record: Dict[str, Any] = {
         "ts": local_iso(),
         "event": event_name,
+        "channel": mode,
         "session_id": event.get("session_id") or "",
         "cwd": str(event.get("cwd") or ""),
         "input_keys": sorted(str(key) for key in event.keys()),
         "summary": summary,
+        "seq": seq,
     }
-    if record_seq:
-        record["seq"] = record_seq
     if event_name == "SessionStart":
-        stdout = inject_watch_paths(stdout, watch_paths_from_env(environ))
+        stdout = inject_watch_paths(stdout, watch)
     if event.get("prompt_id"):
         record["prompt_id"] = str(event["prompt_id"])[:80]
     if decision:
@@ -1273,8 +1474,9 @@ def handle_event(
         record["rule_id"] = rule_id
     if pending_id:
         record["pending_id"] = pending_id
+    if push_id:
+        record["push_id"] = push_id
 
-    directory = task_dir_for(event, environ)
     log_path = directory / "events.jsonl"
 
     def before_write(item: dict) -> None:
@@ -1294,27 +1496,60 @@ def bridge_root_from_env() -> Path:
     return Path(os.environ.get("CC_BRIDGE_DIR") or (Path.home() / ".cc-bridge")).expanduser()
 
 
+USAGE = (
+    "usage: bridge.py pending <task> | reply <task> <seq> <json> "
+    "| push <task> [--since <seq>] | watch <task> [--once | --for <seconds>]\n"
+)
+
+
+def task_root(task: str) -> Path:
+    return bridge_root_from_env() / "tasks" / task
+
+
+def short_notices(directory: Path) -> List[Path]:
+    if not directory.is_dir():
+        return []
+    return sorted(path for path in directory.glob("*.json") if not path.name.endswith(".full.json"))
+
+
+def notice_seq(path: Path) -> int:
+    head = path.name.split("-", 1)[0]
+    return int(head) if head.isdigit() else 0
+
+
+def read_push_cursor(task_dir: Path) -> int:
+    path = task_dir / "push" / "cursor"
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return 0
+    return int(raw) if raw.isdigit() else 0
+
+
+def write_push_cursor(task_dir: Path, seq: int) -> None:
+    write_atomic(task_dir / "push" / "cursor", str(seq) + "\n")
+
+
 def cli(argv: List[str]) -> HookResult:
-    if not argv or argv[0] not in ("pending", "reply"):
-        return HookResult(stderr="usage: bridge.py pending <task> | reply <task> <seq> <json>\n", code=2)
+    if not argv or argv[0] not in ("pending", "reply", "push", "watch"):
+        return HookResult(stderr=USAGE, code=2)
     if argv[0] == "pending":
         if len(argv) != 2:
             return HookResult(stderr="usage: bridge.py pending <task>\n", code=2)
         task = safe_component(argv[1]) or ""
         if not task:
             return HookResult(stderr="bad task id\n", code=2)
-        pending = bridge_root_from_env() / "tasks" / task / "pending"
-        replies = bridge_root_from_env() / "tasks" / task / "replies"
-        if not pending.is_dir():
-            return HookResult(stdout="")
+        root = task_root(task)
         lines = []
-        for path in sorted(pending.glob("*.json")):
-            if path.name.endswith(".full.json"):
-                continue
+        for path in short_notices(root / "pending"):
             seq = path.name.split("-", 1)[0]
-            if not (replies / f"{seq}.json").is_file():
+            if not (root / "replies" / f"{seq}.json").is_file():
                 lines.append(str(path))
         return HookResult(stdout=("\n".join(lines) + ("\n" if lines else "")))
+    if argv[0] == "push":
+        return push_command(argv[1:])
+    if argv[0] == "watch":
+        return watch_command(argv[1:])
     if len(argv) != 4:
         return HookResult(stderr="usage: bridge.py reply <task> <seq> <json>\n", code=2)
     task = safe_component(argv[1]) or ""
@@ -1326,7 +1561,7 @@ def cli(argv: List[str]) -> HookResult:
         return HookResult(stderr=f"reply is not JSON: {exc}\n", code=2)
     if not isinstance(payload, dict):
         return HookResult(stderr="reply JSON must be an object\n", code=2)
-    dest = bridge_root_from_env() / "tasks" / task / "replies" / f"{argv[2]}.json"
+    dest = task_root(task) / "replies" / f"{argv[2]}.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
     temporary = dest.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -1334,8 +1569,92 @@ def cli(argv: List[str]) -> HookResult:
     return HookResult(stdout=str(dest) + "\n")
 
 
+def push_command(argv: List[str]) -> HookResult:
+    since: Optional[int] = None
+    task = ""
+    index = 0
+    while index < len(argv):
+        item = argv[index]
+        if item == "--since":
+            if index + 1 >= len(argv) or not argv[index + 1].isdigit():
+                return HookResult(stderr="usage: bridge.py push <task> [--since <seq>]\n", code=2)
+            since = int(argv[index + 1])
+            index += 2
+            continue
+        if item.startswith("-") or task:
+            return HookResult(stderr="usage: bridge.py push <task> [--since <seq>]\n", code=2)
+        task = item
+        index += 1
+    task = safe_component(task) or ""
+    if not task:
+        return HookResult(stderr="usage: bridge.py push <task> [--since <seq>]\n", code=2)
+    root = task_root(task)
+    cursor = read_push_cursor(root)
+    floor = since if since is not None else cursor
+    chosen = [path for path in short_notices(root / "push") if notice_seq(path) > floor]
+    if chosen:
+        write_push_cursor(root, max(cursor, max(notice_seq(path) for path in chosen)))
+    text = "\n".join(str(path) for path in chosen)
+    return HookResult(stdout=text + ("\n" if text else ""))
+
+
+def watch_command(argv: List[str]) -> HookResult:
+    once = False
+    seconds: Optional[float] = None
+    task = ""
+    index = 0
+    while index < len(argv):
+        item = argv[index]
+        if item == "--once":
+            once = True
+            index += 1
+            continue
+        if item == "--for":
+            if index + 1 >= len(argv):
+                return HookResult(stderr="usage: bridge.py watch <task> [--once | --for <seconds>]\n", code=2)
+            try:
+                seconds = float(argv[index + 1])
+            except ValueError:
+                return HookResult(stderr="usage: bridge.py watch <task> [--once | --for <seconds>]\n", code=2)
+            index += 2
+            continue
+        if item.startswith("-") or task:
+            return HookResult(stderr="usage: bridge.py watch <task> [--once | --for <seconds>]\n", code=2)
+        task = item
+        index += 1
+    task = safe_component(task) or ""
+    if not task:
+        return HookResult(stderr="usage: bridge.py watch <task> [--once | --for <seconds>]\n", code=2)
+    root = task_root(task)
+    seen = set()
+    deadline = None if seconds is None else time.monotonic() + max(0.0, seconds)
+    lines: List[str] = []
+
+    def take() -> None:
+        for kind, folder in (("pending", root / "pending"), ("push", root / "push")):
+            replies = root / "replies"
+            for path in short_notices(folder):
+                if kind == "pending" and (replies / f"{notice_seq(path)}.json").is_file():
+                    continue
+                key = f"{kind} {path}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                lines.append(key)
+                sys.stdout.write(key + "\n")
+                sys.stdout.flush()
+
+    take()
+    if once:
+        return HookResult(stdout="")
+    while deadline is None or time.monotonic() < deadline:
+        time.sleep(0.25)
+        take()
+    return HookResult(stdout="")
+
+
 def main() -> HookResult:
-    if len(sys.argv) > 1 and sys.argv[1] in ("pending", "reply"):
+    if len(sys.argv) > 1 and sys.argv[1] in ("pending", "reply", "push", "watch"):
         return cli(sys.argv[1:])
     raw = sys.stdin.read()
     if not raw.strip():

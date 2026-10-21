@@ -1,10 +1,12 @@
-# wait_all 事件裁剪建议
+# wait_all 事件裁剪
 
-还没改运行行为。表里的「fizzbuzz pending」来自现场 demo `0232cdaf22cd4acb881416b8ab371d65`（`/private/tmp/ccb-demo-fFSz`），那次一共 24 个 pending。`-p` 是否触发以 `tests/hooks/report.md` 为准。
+已作为默认配置落地：`config/bridge.json` 的 `events`，以及 `claude/hooks/hooks.json` 的同步/异步。下面的表保留当时的建议，并标明实际采用的模式。Stop 从建议的 PUSH 改成了批准方案里的 WAIT。没有事件设为 OFF。
 
-模式：`WAIT` 必须等 agent 回复；`PUSH` 只异步通知、不阻塞；`LOG` 只写本地日志；`OFF` 不注册。这次没有建议 `OFF`。
+表里的「fizzbuzz pending」来自裁剪前的现场 demo `0232cdaf22cd4acb881416b8ab371d65`（`/private/tmp/ccb-demo-fFSz`），那次一共 24 个 pending。`-p` 是否触发以 `tests/hooks/report.md` 为准。
 
-| 事件 | 决定权 | -p 里触发 | fizzbuzz pending | 建议 | 原因 |
+SessionStart 和 WorktreeCreate 在 hooks 里保持同步：前者要在设了 `CC_BRIDGE_WATCH` 时注入 watchPaths（此时也不等回复），后者必须返回自己创建的 worktree 路径，同时仍 push 一条通知。
+
+| 事件 | 决定权 | -p 里触发 | fizzbuzz pending | 已采用 | 原因 |
 | --- | --- | --- | --- | --- | --- |
 | SessionStart | additionalContext、watchPaths | yes | 1 | PUSH | 能注入上下文，但 demo 只 ack，等待会卡住整个会话启动。 |
 | Setup | 无 | yes | 0 | LOG | 只在 `--init` / `--maintenance` 出现，没有可回复的决定。 |
@@ -23,7 +25,7 @@
 | SubagentStop | block + reason | yes | 0 | PUSH | 可以拦住子代理结束，fizzbuzz 没用到这个决定。 |
 | TaskCreated | block | yes | 0 | PUSH | 可以拦建任务，普通编码任务里很少需要当场否决。 |
 | TaskCompleted | block | yes | 0 | PUSH | 同上，完成标记不必每次等人。 |
-| Stop | block + reason | yes | 1 | PUSH | 可以要求继续，demo 只 ack，等待会拖住进程退出。 |
+| Stop | block + reason | yes | 1 | WAIT | 批准方案把它留作验收：block 让 CC 继续，ack 才结束，并用 stop_hook_active 和最多 3 次阻断防止死循环。 |
 | StopFailure | 无 | no | 0 | PUSH | API 失败要让 agent 看见，但这次调用已经结束，不必再等。 |
 | TeammateIdle | block | no | 0 | PUSH | 可以拦住队友空闲；当前 `-p` 触发不了，先不要同步等待。 |
 | ConfigChange | 无 | yes | 0 | LOG | 配置变了，hook 不能撤销这次变更。 |

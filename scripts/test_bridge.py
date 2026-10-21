@@ -52,17 +52,6 @@ DOCUMENTED_EVENTS = [
     "ElicitationResult",
     "SessionEnd",
 ]
-SYNC_EVENTS = {
-    "PreToolUse",
-    "PermissionRequest",
-    "Stop",
-    "StopFailure",
-    "WorktreeCreate",
-    "WorktreeRemove",
-    "SessionEnd",
-}
-
-
 class BridgeTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -102,7 +91,12 @@ class BridgeTest(unittest.TestCase):
             lines = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
         return result, lines
 
+    def log_only(self, *names: str) -> None:
+        for name in names:
+            self.environ[f"CC_BRIDGE_EVENT_MODE_{name}"] = "log"
+
     def test_rm_rf_denied_and_plain_rm_allowed(self):
+        self.log_only("PreToolUse")
         denied, lines = self.run_pre("Bash", {"command": "rm -rf scratch"})
         self.assertIn("permissionDecision", denied.stdout)
         self.assertIn('"deny"', denied.stdout)
@@ -116,6 +110,7 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(allowed.stdout, "")
 
     def test_force_push(self):
+        self.log_only("PreToolUse")
         for command in (
             "git push --force",
             "git push -f origin main",
@@ -129,6 +124,7 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(allowed.stdout, "")
 
     def test_env_and_ssh_paths(self):
+        self.log_only("PreToolUse")
         ssh_file = str(self.home / ".ssh" / "id_rsa")
         cases = [
             ("Read", {"file_path": str(self.cwd / ".env")}, True),
@@ -165,6 +161,7 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(lines[-1]["rule_id"], "bash-rm-rf")
 
     def test_disabled_rule_allows(self):
+        self.log_only("PreToolUse")
         rules = bridge.default_rules()
         for rule in rules:
             if rule["id"] == "bash-rm-rf":
@@ -173,6 +170,7 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(result.stdout, "")
 
     def test_log_shape_redaction_and_seq(self):
+        self.log_only("PreToolUse")
         self.environ["CC_BRIDGE_CURSOR_API_KEY"] = "super-secret-key"
         result, _ = self.run_pre(
             "Bash", {"command": "echo super-secret-key && echo hello-from-bridge"}
@@ -189,12 +187,14 @@ class BridgeTest(unittest.TestCase):
         self.assertIn("hello-from-bridge", rows[-1]["summary"]["command"])
 
     def test_task_id_traversal_falls_back(self):
+        self.log_only("PreToolUse")
         self.environ["CC_TASK_ID"] = "../evil"
         bridge.handle_event(self.pre("Bash", {"command": "echo hi"}), self.environ)
         self.assertTrue((self.bridge_dir / "tasks" / "sess" / "events.jsonl").is_file())
         self.assertFalse((self.bridge_dir / "evil").exists())
 
     def test_notifier_off_and_on(self):
+        self.log_only("Stop")
         bridge.handle_event(
             {
                 "hook_event_name": "Stop",
@@ -226,6 +226,7 @@ class BridgeTest(unittest.TestCase):
         self.assertNotIn("super-secret-key", log)
 
     def test_wait_reply_and_timeout(self):
+        self.log_only("PermissionRequest", "PreToolUse")
         self.environ["CC_BRIDGE_WAIT"] = "1"
         self.environ["CC_BRIDGE_WAIT_TIMEOUT"] = "2"
 
@@ -273,6 +274,7 @@ class BridgeTest(unittest.TestCase):
         self.assertIn("等待回复超时", lines[-1]["decision_reason"])
 
     def test_truncation(self):
+        self.log_only("PreToolUse")
         cfg = bridge.default_config()
         cfg["log"]["max_field_chars"] = 10
         _, lines = self.run_pre(
@@ -291,15 +293,30 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(note, "")
         self.assertFalse(cfg["notifier"]["enabled"])
         self.assertFalse(cfg["wait"]["enabled"])
+        self.assertFalse(cfg["wait_all"]["enabled"])
+        self.assertEqual(cfg["events"]["PreToolUse"], "wait")
+        self.assertEqual(cfg["events"]["PostToolUse"], "push")
+        self.assertEqual(cfg["events"]["MessageDisplay"], "log")
+        self.assertEqual(cfg["stop"]["max_blocks"], 3)
 
     def test_hooks_cover_documented_events(self):
         hooks = json.loads((ROOT / "claude" / "hooks" / "hooks.json").read_text(encoding="utf-8"))
         self.assertEqual(list(hooks["hooks"]), DOCUMENTED_EVENTS)
+        waiting = {name for name, mode in bridge.DEFAULT_EVENT_MODES.items() if mode == "wait"}
+        self.assertEqual(waiting, {"PreToolUse", "PermissionRequest", "Elicitation", "Stop"})
         for name, groups in hooks["hooks"].items():
             handler = groups[0]["hooks"][0]
             self.assertIn("dispatch.py", handler["command"])
-            self.assertNotIn("async", handler)
-            self.assertGreaterEqual(handler["timeout"], 55)
+            if bridge.hook_runs_async(name):
+                self.assertTrue(handler.get("async"), name)
+            else:
+                self.assertNotIn("async", handler, name)
+            if name == "SessionEnd":
+                self.assertEqual(handler["timeout"], 55)
+            elif bridge.hook_runs_async(name):
+                self.assertGreaterEqual(handler["timeout"], 30)
+            else:
+                self.assertGreaterEqual(handler["timeout"], 180)
         self.assertFalse((ROOT / "hooks" / "hooks.json").exists())
         self.assertFalse((ROOT / "skills").exists())
         plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
@@ -449,6 +466,7 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(payload["hookSpecificOutput"]["decision"]["behavior"], "allow")
 
     def test_unset_probe_does_not_read_a_file(self):
+        self.log_only("PreToolUse")
         self.environ.pop("CC_BRIDGE_PROBE", None)
         result, _ = self.run_pre("Bash", {"command": "echo hi"})
         self.assertEqual(result.stdout, "")
@@ -580,6 +598,168 @@ class BridgeTest(unittest.TestCase):
             wrote = bridge.cli(["reply", "task1", "99", '{"ack": true}'])
             self.assertEqual(wrote.code, 0)
             self.assertTrue((self.bridge_dir / "tasks" / "task1" / "replies" / "99.json").is_file())
+        finally:
+            if previous is None:
+                os.environ.pop("CC_BRIDGE_DIR", None)
+            else:
+                os.environ["CC_BRIDGE_DIR"] = previous
+
+
+    def test_mode_routing_push_log_off_and_env(self):
+        post = {
+            "hook_event_name": "PostToolUse",
+            "session_id": "sess",
+            "cwd": str(self.cwd),
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo hi"},
+        }
+        result = bridge.handle_event(post, self.environ)
+        self.assertEqual(result.stdout, "")
+        push = self.bridge_dir / "tasks" / "task1" / "push"
+        self.assertTrue(any(push.glob("*-PostToolUse.json")))
+        self.assertTrue((push / "stream.jsonl").is_file())
+        self.assertFalse((self.bridge_dir / "tasks" / "task1" / "pending").exists())
+
+        bridge.handle_event(
+            {"hook_event_name": "MessageDisplay", "session_id": "sess", "cwd": str(self.cwd), "message": "hi"},
+            self.environ,
+        )
+        log = [
+            json.loads(line)
+            for line in (self.bridge_dir / "tasks" / "task1" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(log[-1]["channel"], "log")
+        self.assertFalse(any(push.glob("*-MessageDisplay.json")))
+
+        self.environ["CC_BRIDGE_EVENT_MODE_MessageDisplay"] = "push"
+        bridge.handle_event(
+            {"hook_event_name": "MessageDisplay", "session_id": "sess", "cwd": str(self.cwd), "message": "again"},
+            self.environ,
+        )
+        self.assertTrue(any(push.glob("*-MessageDisplay.json")))
+
+        self.environ["CC_BRIDGE_EVENT_MODE_Setup"] = "off"
+        before = (self.bridge_dir / "tasks" / "task1" / "events.jsonl").read_text(encoding="utf-8")
+        bridge.handle_event(
+            {"hook_event_name": "Setup", "session_id": "sess", "cwd": str(self.cwd)},
+            self.environ,
+        )
+        self.assertEqual((self.bridge_dir / "tasks" / "task1" / "events.jsonl").read_text(encoding="utf-8"), before)
+
+        denied, lines = self.run_pre("Bash", {"command": "rm -rf scratch"})
+        self.assertIn('"deny"', denied.stdout)
+        self.assertEqual(lines[-1]["channel"], "wait")
+        self.assertFalse((self.bridge_dir / "tasks" / "task1" / "pending").exists())
+
+    def test_session_start_watch_does_not_wait(self):
+        self.environ["CC_BRIDGE_EVENT_MODE_SessionStart"] = "wait"
+        self.environ["CC_BRIDGE_WATCH"] = str(self.cwd / "watched")
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.3"
+        result = bridge.handle_event(
+            {"hook_event_name": "SessionStart", "session_id": "sess", "cwd": str(self.cwd)},
+            self.environ,
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["hookSpecificOutput"]["watchPaths"], [str(self.cwd / "watched")])
+        push = self.bridge_dir / "tasks" / "task1" / "push"
+        self.assertTrue(any(push.glob("*-SessionStart.json")))
+        self.assertFalse((self.bridge_dir / "tasks" / "task1" / "pending").exists())
+
+    def test_stop_loop_guard(self):
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "2"
+
+        def answer(payload: dict) -> None:
+            pending = self.bridge_dir / "tasks" / "task1" / "pending"
+            for _ in range(40):
+                files = [path for path in pending.glob("*-Stop.json")] if pending.is_dir() else []
+                fresh = [path for path in files if not (self.bridge_dir / "tasks" / "task1" / "replies" / f"{path.name.split('-', 1)[0]}.json").is_file()]
+                if fresh:
+                    seq = fresh[-1].name.split("-", 1)[0]
+                    target = self.bridge_dir / "tasks" / "task1" / "replies" / f"{seq}.json"
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(json.dumps(payload), encoding="utf-8")
+                    return
+                import time
+                time.sleep(0.05)
+
+        def run_stop(active: bool, payload: dict):
+            thread = threading.Thread(target=answer, args=(payload,))
+            thread.start()
+            result = bridge.handle_event(
+                {
+                    "hook_event_name": "Stop",
+                    "session_id": "sess",
+                    "cwd": str(self.cwd),
+                    "stop_hook_active": active,
+                },
+                self.environ,
+            )
+            thread.join(3)
+            return result
+
+        block = {"decision": "block", "reason": "also add a test for n=30"}
+        for _ in range(3):
+            result = run_stop(False, block)
+            self.assertIn('"block"', result.stdout)
+        capped = run_stop(False, block)
+        self.assertEqual(capped.stdout, "")
+        log = [
+            json.loads(line)
+            for line in (self.bridge_dir / "tasks" / "task1" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(log[-1]["decision"], "stop-block-cap")
+        active = run_stop(True, {"ack": True})
+        self.assertEqual(active.stdout, "")
+        log = [
+            json.loads(line)
+            for line in (self.bridge_dir / "tasks" / "task1" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(log[-1]["decision"], "stop-hook-active")
+
+    def test_elicitation_timeout_declines(self):
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.2"
+        result = bridge.handle_event(
+            {"hook_event_name": "Elicitation", "session_id": "sess", "cwd": str(self.cwd)},
+            self.environ,
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["hookSpecificOutput"]["action"], "decline")
+
+    def test_push_consume_and_watch(self):
+        for text in ("one", "two"):
+            bridge.handle_event(
+                {
+                    "hook_event_name": "PostToolUse",
+                    "session_id": "sess",
+                    "cwd": str(self.cwd),
+                    "tool_name": "Bash",
+                    "tool_input": {"command": text},
+                },
+                self.environ,
+            )
+        previous = os.environ.get("CC_BRIDGE_DIR")
+        os.environ["CC_BRIDGE_DIR"] = str(self.bridge_dir)
+        try:
+            first = bridge.cli(["push", "task1"])
+            self.assertEqual(first.code, 0, first.stderr)
+            self.assertEqual(len(first.stdout.splitlines()), 2)
+            second = bridge.cli(["push", "task1"])
+            self.assertEqual(second.stdout, "")
+            replay = bridge.cli(["push", "task1", "--since", "0"])
+            self.assertEqual(len(replay.stdout.splitlines()), 2)
+            script = str(ROOT / "scripts" / "bridge.py")
+            env = os.environ.copy()
+            env["CC_BRIDGE_DIR"] = str(self.bridge_dir)
+            watched = subprocess.run(
+                [sys.executable, script, "watch", "task1", "--once"],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(watched.returncode, 0, watched.stderr)
+            self.assertIn("push ", watched.stdout)
+            self.assertEqual(watched.stdout.count("\n"), 2)
         finally:
             if previous is None:
                 os.environ.pop("CC_BRIDGE_DIR", None)

@@ -1,6 +1,6 @@
 # cc-cursor-bridge
 
-Claude Code 插件加 Cursor skill。Cursor agent 在这台 Mac 上调用本机 `claude -p` 写代码时，插件负责三件事：把每个 hook 事件按顺序记下来，拦住危险的 Bash 和文件操作，并留出一条本地通道，让发起任务的 Cursor agent 以后可以批准或拒绝。策略是先把文档里的 hook 全部接上，以后再从规则文件里一条条削掉。
+Claude Code 插件加 Cursor skill。Cursor agent 在这台 Mac 上调用本机 `claude -p` 写代码时，插件负责三件事：把每个 hook 事件按顺序记下来，拦住危险的 Bash 和文件操作，并按事件模式决定是等待回复、异步推送，还是只写日志。33 个事件都还注册着，默认分流写在 `config/bridge.json` 的 `events`。
 
 本机 Claude Code 是 **2.1.306**（`/Users/timon/.local/bin/claude`）。事件清单以官方 hooks 文档和这个版本二进制里的合法事件集合为准，两者一致。
 
@@ -114,52 +114,63 @@ Grep 的搜索 pattern 不参与判断，只看 `path` 和 `glob`，避免搜源
 
 默认会排队的事件：`PermissionRequest`、被拒绝的 `PreToolUse`（`pre_tool_use: denied_only`）、`PostToolUseFailure`、`StopFailure`、`Stop`、`Notification`。notifier 关着时这些事件的日志字段 `notify` 是 `disabled`。
 
-### 等待回复
+### 事件模式
 
-默认关。打开后：
+默认按 `config/bridge.json` 的 `events` 分流。单次可用 `CC_BRIDGE_EVENT_MODE_<事件名>=wait|push|log|off` 覆盖。`CC_BRIDGE_WAIT_ALL=1` 仍可强制 33 个事件都走 pending，用来调试；PUSH/LOG 的 hook 是异步的，Claude Code 不会为它们阻塞。
 
-- `PermissionRequest` 会等（`on_permission_request` 默认 true）
-- `PreToolUse` 默认不等；规则已经 deny 的也不会再等
-- 请求写到 `pending/<id>.json`，回复写到 `replies/<id>.json`
-- 回复形如 `{"decision":"allow","reason":"..."}` 或 `deny`
-- 超时默认 deny
+| 模式 | 事件 | 行为 |
+| --- | --- | --- |
+| wait | PreToolUse、PermissionRequest、Elicitation、Stop | 同步，timeout 180。写 `pending/<seq>-<事件>.json` 并等到 `replies/<seq>.json` |
+| push | SessionStart、UserPromptSubmit、UserPromptExpansion、PostToolUse、PostToolUseFailure、StopFailure、SubagentStop、TaskCreated、TaskCompleted、TeammateIdle、WorktreeCreate、PreCompact、PreModelSwitch | 写 `push/<seq>-<事件>.json` 并追加 `push/stream.jsonl`，不阻塞 |
+| log | Setup、InstructionsLoaded、MessageDisplay、PermissionDenied、PostToolBatch、Notification、SubagentStart、ConfigChange、CwdChanged、DirectoryAdded、FileChanged、WorktreeRemove、PostCompact、PostModelSwitch、ElicitationResult、SessionEnd | 只追加 `events.jsonl` |
+| off | 无默认项 | 尽快返回。PreToolUse 命中规则时仍然 deny 并记日志 |
 
-`PreToolUse` 上的 `allow` 会让这一次工具调用跳过权限提示。PermissionRequest 的 allow/deny 走官方的 `decision.behavior`。
+SessionStart 和 WorktreeCreate 在 `hooks.json` 里保持同步。SessionStart 不等回复，这样 `CC_BRIDGE_WATCH` 能注入 `watchPaths`；设了这个变量时，即使模式被改成 wait 也不等人。WorktreeCreate 自己执行 `git worktree add`，把路径打到 stdout，同时 push 一条通知。
+
+等待失败策略：PreToolUse 和 PermissionRequest 超时 deny，Elicitation 超时 decline，Stop 超时放行结束。Stop 的回复 `{"decision":"block","reason":"..."}` 会让 Claude Code 继续；`{"ack":true}` 结束。`stop_hook_active` 为 true 且没有明确 block 时放行。每个任务最多阻断 `stop.max_blocks` 次（默认 3）。
+
+助手命令：`python3 scripts/bridge.py pending <task>`、`reply <task> <seq> <json>`、`push <task> [--since <seq>]`、`watch <task>`。
+
+旧的窄等待 `CC_BRIDGE_WAIT=1` 只在事件模式为 `log` 时再生效。
 
 ### 事件清单
 
-33 个 hook 全部同步注册，超时普通事件 180 秒、SessionEnd 55 秒（官方 SessionEnd 预算最高 60 秒；UserPromptSubmit / PreModelSwitch / PostModelSwitch 不写 timeout 时默认只有 30 秒，MessageDisplay 只有 10 秒，所以这里显式写了更大的 timeout）。`wait_all` 关掉时脚本记完日志就返回。`CC_BRIDGE_WAIT_ALL=1` 时每个事件写 `pending/<seq>-<事件>.json` 并等到 `replies/<seq>.json`。超时对 PreToolUse 和 PermissionRequest 默认 deny，其余事件不改决定。助手命令：`python3 scripts/bridge.py pending <task>` 和 `reply <task> <seq> <json>`。
+PUSH/LOG 的 hook 是 `async: true`（timeout 30，SessionEnd 55，因为官方 SessionEnd 预算最高 60 秒）。WAIT 以及 SessionStart、WorktreeCreate 是同步，timeout 180。UserPromptSubmit / PreModelSwitch / PostModelSwitch 不写 timeout 时默认只有 30 秒，MessageDisplay 只有 10 秒，所以异步事件也显式写了 timeout。
 
 | 事件 | 模式 | 现在做什么 |
 | --- | --- | --- |
-| SessionStart | 异步 | 记日志 |
-| Setup | 异步 | 记日志 |
-| InstructionsLoaded | 异步 | 记日志 |
-| UserPromptSubmit | 异步 | 记日志 |
-| UserPromptExpansion | 异步 | 记日志 |
-| MessageDisplay | 异步 | 记日志，不改显示文本 |
-| PreToolUse | 同步 | 记日志；命中规则则 deny；可选等待 |
-| PermissionRequest | 同步 | 记日志；等待模式打开时等回复 |
-| PermissionDenied | 异步 | 记日志 |
-| PostToolUse | 异步 | 记日志，含截断后的工具输出 |
-| PostToolUseFailure | 异步 | 记日志；notifier 打开时进 outbox |
-| PostToolBatch | 异步 | 记日志 |
-| Notification | 异步 | 记日志；notifier 打开时进 outbox |
-| SubagentStart / SubagentStop | 异步 | 记日志 |
-| TaskCreated / TaskCompleted | 异步 | 记日志 |
-| Stop | 同步 | 记日志；notifier 打开时进 outbox |
-| StopFailure | 同步 | 记日志；notifier 打开时进 outbox |
-| TeammateIdle | 异步 | 记日志 |
-| ConfigChange | 异步 | 记日志 |
-| CwdChanged | 异步 | 记日志 |
-| DirectoryAdded | 异步 | 记日志 |
-| FileChanged | 异步 | 记日志。没有预置文件名，不主动 watch；等别的 hook 给出 `watchPaths` 才会响 |
-| WorktreeCreate | 同步 | 记日志，并自己执行 `git worktree add`（见限制） |
-| WorktreeRemove | 同步 | 记日志，并 `git worktree remove --force`。只接受 `.claude/worktrees/` 下的路径 |
-| PreCompact / PostCompact | 异步 | 记日志，不阻断 compact |
-| PreModelSwitch / PostModelSwitch | 异步 | 记日志 |
-| Elicitation / ElicitationResult | 异步 | 记日志 |
-| SessionEnd | 同步 | 记日志。timeout 5 秒，避免挤在 SessionEnd 默认的 1.5 秒预算里写不完 |
+| SessionStart | push，同步不等人 | 记日志并 push。`CC_BRIDGE_WATCH` 时注入 watchPaths |
+| Setup | log | 记日志 |
+| InstructionsLoaded | log | 记日志 |
+| UserPromptSubmit | push | push，不阻塞 |
+| UserPromptExpansion | push | push，不阻塞 |
+| MessageDisplay | log | 记日志，不改显示文本 |
+| PreToolUse | wait | 命中规则则立刻 deny 且不写 pending；否则等回复 |
+| PermissionRequest | wait | 等回复 |
+| PermissionDenied | log | 记日志 |
+| PostToolUse | push | push，含截断后的工具输出 |
+| PostToolUseFailure | push | push；notifier 打开时进 outbox |
+| PostToolBatch | log | 记日志 |
+| Notification | log | 记日志；notifier 打开时进 outbox |
+| SubagentStart | log | 记日志 |
+| SubagentStop | push | push |
+| TaskCreated / TaskCompleted | push | push |
+| Stop | wait | 等验收回复。block 继续，ack 结束。notifier 打开时进 outbox |
+| StopFailure | push | push；notifier 打开时进 outbox |
+| TeammateIdle | push | push |
+| ConfigChange | log | 记日志 |
+| CwdChanged | log | 记日志 |
+| DirectoryAdded | log | 记日志 |
+| FileChanged | log | 记日志。没有预置文件名；SessionStart 注入 `watchPaths` 之后才会响 |
+| WorktreeCreate | push，同步 | 自己执行 `git worktree add` 并返回路径，同时 push |
+| WorktreeRemove | log | 记日志，并 `git worktree remove --force`。只接受 `.claude/worktrees/` 下的路径 |
+| PreCompact | push | push，默认不阻断 |
+| PostCompact | log | 记日志 |
+| PreModelSwitch | push | push |
+| PostModelSwitch | log | 记日志 |
+| Elicitation | wait | 等 accept 或 decline。超时 decline |
+| ElicitationResult | log | 记日志 |
+| SessionEnd | log | 异步记日志。timeout 55 秒 |
 
 ## 本机不支持的 hook 事件
 
@@ -258,7 +269,7 @@ Write `hello.txt` 没有被插件拒绝（PreToolUse 没有 decision），但这
 - `WorktreeCreate` 一旦注册就会替换 Claude Code 默认的 git worktree。脚本改为在 `<cwd>/.claude/worktrees/<slug>` 执行 `git worktree add`，分支名 `cc-bridge/<slug>`。失败时 worktree 创建失败。
 - `WorktreeRemove` 失败时不执行 `rm -rf`。
 - `git push origin +branch` 不拦。只有 `-f` 而没有 `-r` 的 `rm` 不拦。
-- 等待模式默认关。打开后，PreToolUse 的 allow 会跳过该次权限提示。
+- 默认只有 PreToolUse、PermissionRequest、Elicitation、Stop 会等回复。PreToolUse 的 allow 会跳过该次权限提示。Stop 最多阻断 3 次。
 - notifier 不发网络请求。
 - 日志字段会截断。
 - hook 依赖 `PATH` 里的 `python3`。脚本按 3.9 写，本机 Homebrew 3.14 和 `/usr/bin/python3` 3.9 都跑过单元测试。

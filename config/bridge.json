@@ -33,5 +33,43 @@
   "pending": {
     "command_chars": 4000,
     "content_chars": 2000
+  },
+  "stop": {
+    "max_blocks": 3
+  },
+  "events": {
+    "SessionStart": "push",
+    "Setup": "log",
+    "InstructionsLoaded": "log",
+    "UserPromptSubmit": "push",
+    "UserPromptExpansion": "push",
+    "MessageDisplay": "log",
+    "PreToolUse": "wait",
+    "PermissionRequest": "wait",
+    "PermissionDenied": "log",
+    "PostToolUse": "push",
+    "PostToolUseFailure": "push",
+    "PostToolBatch": "log",
+    "Notification": "log",
+    "SubagentStart": "log",
+    "SubagentStop": "push",
+    "TaskCreated": "push",
+    "TaskCompleted": "push",
+    "Stop": "wait",
+    "StopFailure": "push",
+    "TeammateIdle": "push",
+    "ConfigChange": "log",
+    "CwdChanged": "log",
+    "DirectoryAdded": "log",
+    "FileChanged": "log",
+    "WorktreeCreate": "push",
+    "WorktreeRemove": "log",
+    "PreCompact": "push",
+    "PostCompact": "log",
+    "PreModelSwitch": "push",
+    "PostModelSwitch": "log",
+    "Elicitation": "wait",
+    "ElicitationResult": "log",
+    "SessionEnd": "log"
   }
 }
