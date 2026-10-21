@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Self-test workspace. The README stays; runtime files do not.
+examples/sandbox/*
+!examples/sandbox/README.md

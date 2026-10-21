@@ -1,0 +1,12 @@
+{
+  "name": "cc-cursor-bridge",
+  "version": "0.1.0",
+  "description": "Teaches a Cursor agent how to launch local Claude Code and answer bridge events.",
+  "author": {
+    "name": "ic-timon"
+  },
+  "repository": "https://github.com/ic-timon/cc-cursor-bridge",
+  "keywords": ["claude-code", "hooks", "bridge"],
+  "skills": "./cursor/skills",
+  "hooks": "./cursor/hooks.json"
+}

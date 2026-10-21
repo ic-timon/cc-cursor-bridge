@@ -1,0 +1,16 @@
+{
+  "name": "cc-cursor-bridge",
+  "owner": {
+    "name": "ic-timon"
+  },
+  "metadata": {
+    "description": "Cursor plugin marketplace for cc-cursor-bridge"
+  },
+  "plugins": [
+    {
+      "name": "cc-cursor-bridge",
+      "source": ".",
+      "description": "Skill for driving local Claude Code through the cc-cursor-bridge event log."
+    }
+  ]
+}

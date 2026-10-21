@@ -1,0 +1,28 @@
+{
+  "notifier": {
+    "enabled": false,
+    "events": [
+      "PermissionRequest",
+      "PreToolUse",
+      "PostToolUseFailure",
+      "StopFailure",
+      "Stop",
+      "Notification"
+    ],
+    "pre_tool_use": "denied_only",
+    "endpoint": "https://api.cursor.com/v0/agents/{agent_id}/followup",
+    "agent_id_env": "CC_BRIDGE_CURSOR_AGENT_ID",
+    "api_key_env": "CC_BRIDGE_CURSOR_API_KEY"
+  },
+  "wait": {
+    "enabled": false,
+    "on_permission_request": true,
+    "on_pre_tool_use": false,
+    "timeout_seconds": 120,
+    "poll_interval_seconds": 0.25,
+    "timeout_decision": "deny"
+  },
+  "log": {
+    "max_field_chars": 240
+  }
+}
