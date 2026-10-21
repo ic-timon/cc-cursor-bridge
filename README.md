@@ -19,7 +19,7 @@ config/rules.json                   危险操作规则，可关、可加
 config/bridge.json                  notifier 与等待通道，默认都关
 cursor/skills/claude-code-bridge/   Cursor 插件里的 skill（规范位置）
 cursor/hooks.json                   空的 Cursor hooks，避免误读 CC 的 hooks
-.cursor/skills/claude-code-bridge/  项目级 skill，给 self-hosted worker 测试
+.cursor/skills/claude-code-bridge/  与插件 skill 相同的副本；本机 worker 实测未加载
 examples/sandbox/                   claude --plugin-dir 自测目录，产物不入库
 ```
 
@@ -37,7 +37,7 @@ examples/sandbox/                   claude --plugin-dir 自测目录，产物不
 
 Cursor 还会从 `.claude/skills/` 加载 skill。这个仓库没有 `.claude/skills/`。Claude Code 2.1.306 里出现 `.cursor/skills` 的那段代码是迁移扫描（把 Cursor 配置导入成 Claude 配置），不是每次会话自动加载。项目级 `.cursor/skills/` 因此不会在普通 `claude -p` 里变成 Claude 的 skill。
 
-`.cursor/skills/claude-code-bridge/SKILL.md` 和插件里那份内容相同，只为了测 self-hosted worker。文档写明个人 skill 不会同步到 worker，仓库里的项目级 skill 会。两份要一起改。
+`.cursor/skills/claude-code-bridge/SKILL.md` 和插件里那份内容相同，改的时候两份一起改。这台 self-hosted worker 的实测没有加载项目级 `.cursor/skills/`。
 
 ## Claude Code 插件
 
@@ -183,51 +183,46 @@ rsync -a --delete \
   ~/.cursor/plugins/local/cc-cursor-bridge/
 ```
 
-排除 `.cursor/`，避免本地插件目录里再带一份项目级 skill。然后在 Cursor 里 Reload Window，到 Customize 里确认 skill。这份副本给 IDE 用。self-hosted worker 不依赖它。
+排除 `.cursor/`，避免本地插件目录里再带一份项目级 skill。然后在 Cursor 里 Reload Window，到 Customize 里确认 skill。这台 self-hosted worker 的实测没有加载 `~/.cursor/plugins/local`。
 
-个人 skill 再复制一份（同样不用 symlink）：
-
-```bash
-mkdir -p ~/.cursor/skills/claude-code-bridge
-cp cursor/skills/claude-code-bridge/SKILL.md ~/.cursor/skills/claude-code-bridge/SKILL.md
-```
-
-## 第 2 部分：worker 上能不能读到 skill
-
-文档说 `~/.cursor/skills/` 留在本机，不会同步到 Cloud Agent、远程 SSH 或 self-hosted worker；worker 上应使用仓库里的项目级 skill，或把 skill 烤进 worker 镜像。
-
-这个 worker 跑在用户自己的 Mac 上，文件系统就是那台机器。本会话启动时，注入的 skill 里已经有个人 skill `~/.cursor/skills/android-cli`，也有 `~/.cursor/skills-cursor/` 的内置 skill、`~/.claude/skills/`、`~/.codex/skills/`、`~/.agents/skills/`，以及 `~/.cursor/plugins/cache/` 里的插件 skill。当时还没有 `claude-code-bridge`，所以这次会话看不到它。新会话才会重新发现 skill。
-
-因此三份副本的预期要分开验证，不能靠这次会话下结论：
-
-| 副本 | 路径 | 按文档的预期 | 这次会话看到的 |
-| --- | --- | --- | --- |
-| 个人 skill | `~/.cursor/skills/claude-code-bridge/` | worker 不同步 | 同目录的 `android-cli` 在这次会话里是可见的。新 skill 要新会话才知道 |
-| 项目 skill | 仓库 `.cursor/skills/claude-code-bridge/` | worker 可用 | 会话开始时文件还不存在 |
-| IDE 本地插件 | `~/.cursor/plugins/local/cc-cursor-bridge/` | Reload 之后 IDE 的 Customize 能看到 | worker 会不会加载 local plugin，这次不能验证 |
-
-工作区如果是 `/Users/timon/Sync/Test` 而不是仓库根，仓库里这份嵌套的 `.cursor/skills/` 只在处理 `cc-cursor-bridge/` 下面的文件时出现。要把 skill 装到工作区根上，用：
+给 cloud agent 用的副本装到个人 skill 目录，不要装进 `~/.agents/skills/` 或 `~/.claude/skills/`：
 
 ```bash
-scripts/install_cursor_skill.sh /path/to/workspace
-scripts/install_cursor_skill.sh --uninstall /path/to/workspace
-scripts/install_cursor_skill.sh --user
-scripts/install_cursor_skill.sh --user --uninstall
+scripts/install_cursor_skill.sh
+scripts/install_cursor_skill.sh --uninstall
 ```
 
-工作区模式把 `cursor/skills/claude-code-bridge/` 整份（含以后加的 `scripts/`、`references/`）复制到 `<workspace>/.cursor/skills/claude-code-bridge/`，并且只替换这一个目录。工作区是 `/`、`$HOME`，或不存在时会拒绝。`--uninstall` 只删那个目录。本机 worker 的工作区根是 `/Users/timon/Sync/Test`，已用这个脚本装过；该目录不在本仓库的 git 里。一次新会话没有从那里加载 skill。
+默认目标是 `$HOME/.cursor/skills/claude-code-bridge/`，只替换这一个目录。装完要在 Cursor 里打开 Customize → Skills，执行 “Sync Skills for Cloud Agents”。同步会把这个目录从 `~/.cursor/skills/` 挪进 AgentStores，所以之后改了 skill 要再跑脚本并再同步一次。本机同步后的路径是 `~/Library/Application Support/Cursor/AgentStores/cursor_agent_stores/u299329845/files/skills/claude-code-bridge/`。现在不要对这台机器再跑一遍默认安装，以免和已经同步走的副本冲突。
 
-`--user` 装到 `$HOME/.agents/skills/claude-code-bridge/`（没有这个目录就创建）。同样只替换这一个文件夹，`--user --uninstall` 只删它。不写入 `~/.claude/skills/` 或 `~/.codex/skills/`。同一台机器上的新会话能读到 `~/.agents/skills/`（例如 babysit）、`~/.claude/skills/` 和 `~/.codex/skills/`，读不到 `/Users/timon/Sync/Test/.cursor/skills/`。本机已用 `--user` 装过。
+本地 IDE 可以另外装到某个工作区，self-hosted cloud agent 不会读它：
+
+```bash
+scripts/install_cursor_skill.sh --workspace /path/to/project
+scripts/install_cursor_skill.sh --workspace /path/to/project --uninstall
+```
+
+`--workspace` 拒绝 `/`、`$HOME` 和不存在的路径。
+
+## 第 2 部分：worker 上实际读到了哪里
+
+文档曾写个人 skill 不会进 self-hosted worker，项目级 `.cursor/skills/` 会。这台机器上的新会话结果相反：cloud agent 只通过 “Sync Skills for Cloud Agents” 加载 skill。
+
+没有被加载的位置：
+
+- 仓库里的 `.cursor/skills/claude-code-bridge/`
+- 工作区根 `/Users/timon/Sync/Test/.cursor/skills/claude-code-bridge/`
+- `~/.agents/skills/claude-code-bridge/`（更早一次会话能看到同目录里的 babysit 等 skill；这次核实 cloud agent 并不从这里加载 skill）
+- `~/.cursor/plugins/local/cc-cursor-bridge/`
+
+被加载的位置是同步存储：
+
+`~/Library/Application Support/Cursor/AgentStores/cursor_agent_stores/u299329845/files/skills/claude-code-bridge/`
+
+同步之后 `~/.cursor/skills/` 里的这份被移走，该目录变空。上面两个临时副本（工作区根和 `~/.agents/skills`）已经删掉。AgentStores 里的副本和 `~/.cursor/plugins/local` 留着。
 
 ### 怎么验证
 
-另起一个 agent，工作区用这个仓库，或在父目录里明确去读 `cc-cursor-bridge` 下的文件。请它回答：
-
-1. 当前 skill 列表里有没有 `claude-code-bridge`。
-2. 它看到的文件路径是 `.cursor/skills/...`、`~/.cursor/skills/...`，还是 `~/.cursor/plugins/local/cc-cursor-bridge/cursor/skills/...`。
-3. 用 `/claude-code-bridge` 能否把 skill 正文引进来，并引用其中「不要用 bypass」那一段。
-
-三份都出现时正文应当相同。项目级那份是 worker 的正式来源；个人 skill 和 IDE 插件副本是对照。
+另起一个 cloud agent，请它回答 skill 列表里 `claude-code-bridge` 的文件路径是不是 AgentStores 下面那份。改 skill 之后的验证顺序是：改 `cursor/skills/claude-code-bridge/SKILL.md`，跑 `scripts/install_cursor_skill.sh`，再在 Customize → Skills 里同步一次，然后开新会话。
 
 ## 自测
 

@@ -1,14 +1,15 @@
 #!/bin/sh
-# Copy cursor/skills/claude-code-bridge/ into a workspace or into ~/.agents/skills.
+# Copy cursor/skills/claude-code-bridge/ into ~/.cursor/skills by default.
 # Idempotent. Replaces only that skill directory.
-# Workspace mode refuses /, $HOME, and missing paths.
+# --workspace <dir> is for a local IDE project and is not loaded by this
+# machine's self-hosted cloud agents.
 set -eu
 
 SKILL_NAME=claude-code-bridge
 
 usage() {
-  echo "usage: install_cursor_skill.sh [--uninstall] <workspace_root>" >&2
-  echo "       install_cursor_skill.sh --user [--uninstall]" >&2
+  echo "usage: install_cursor_skill.sh [--uninstall]" >&2
+  echo "       install_cursor_skill.sh --workspace <dir> [--uninstall]" >&2
   exit 2
 }
 
@@ -23,7 +24,6 @@ resolve_dir() {
 }
 
 uninstall=0
-user_mode=0
 workspace=
 
 while [ $# -gt 0 ]; do
@@ -31,8 +31,22 @@ while [ $# -gt 0 ]; do
     --uninstall)
       uninstall=1
       ;;
-    --user)
-      user_mode=1
+    --workspace)
+      shift
+      if [ $# -eq 0 ] || [ -z "$1" ]; then
+        echo "--workspace needs a directory" >&2
+        usage
+      fi
+      case "$1" in
+        -*)
+          echo "--workspace needs a directory, got: $1" >&2
+          usage
+          ;;
+      esac
+      if [ -n "$workspace" ]; then
+        die "workspace already set"
+      fi
+      workspace=$1
       ;;
     --help|-h)
       usage
@@ -46,11 +60,8 @@ while [ $# -gt 0 ]; do
       usage
       ;;
     *)
-      if [ -n "$workspace" ]; then
-        echo "unexpected argument: $1" >&2
-        usage
-      fi
-      workspace=$1
+      echo "unexpected argument: $1" >&2
+      usage
       ;;
   esac
   shift
@@ -64,38 +75,29 @@ if [ "$home_real" = "/" ]; then
   die "\$HOME is /"
 fi
 
-if [ "$user_mode" -eq 1 ]; then
-  if [ -n "$workspace" ]; then
-    die "--user does not take a workspace_root"
-  fi
-  link_a="$home_real/.agents"
-  link_b="$home_real/.agents/skills"
-  dest_parent="$home_real/.agents/skills"
-  dest="$dest_parent/$SKILL_NAME"
-else
-  if [ -z "$workspace" ]; then
-    usage
-  fi
+if [ -n "$workspace" ]; then
   if [ ! -d "$workspace" ]; then
     die "workspace does not exist: $workspace"
   fi
   workspace_real=$(resolve_dir "$workspace") || die "cannot resolve $workspace"
   if [ "$workspace_real" = "/" ]; then
-    die "workspace_root is /"
+    die "workspace is /"
   fi
   if [ "$workspace_real" = "$home_real" ]; then
-    die "workspace_root is \$HOME ($home_real)"
+    die "workspace is \$HOME ($home_real)"
   fi
   link_a="$workspace_real/.cursor"
   link_b="$workspace_real/.cursor/skills"
   dest_parent="$workspace_real/.cursor/skills"
-  dest="$dest_parent/$SKILL_NAME"
-  case "$dest" in
-    "$workspace_real"/.cursor/skills/"$SKILL_NAME") ;;
-    *) die "target escaped workspace: $dest" ;;
-  esac
+  mode=workspace
+else
+  link_a="$home_real/.cursor"
+  link_b="$home_real/.cursor/skills"
+  dest_parent="$home_real/.cursor/skills"
+  mode=user-cursor
 fi
 
+dest="$dest_parent/$SKILL_NAME"
 case "$dest" in
   "$dest_parent"/"$SKILL_NAME") ;;
   *) die "target escaped parent: $dest" ;;
@@ -144,3 +146,13 @@ echo "  from: $src"
 echo "  to:   $dest"
 echo "  files:"
 find "$dest" -print | sed "s|^$dest/||" | sed "s|^$dest$|.|" | sort
+echo
+if [ "$mode" = "workspace" ]; then
+  echo "note: --workspace is for a local IDE project only."
+  echo "      Self-hosted cloud agents on this worker did not load project or workspace .cursor/skills."
+else
+  echo "note: self-hosted workers and cloud agents only see this skill after"
+  echo "      Customize → Skills → Sync Skills for Cloud Agents."
+  echo "      That sync moves it out of ~/.cursor/skills/ into the AgentStores skills directory."
+  echo "      After later edits, run this script again and sync again."
+fi
