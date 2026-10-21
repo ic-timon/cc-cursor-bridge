@@ -206,7 +206,14 @@ cp cursor/skills/claude-code-bridge/SKILL.md ~/.cursor/skills/claude-code-bridge
 | 项目 skill | 仓库 `.cursor/skills/claude-code-bridge/` | worker 可用 | 会话开始时文件还不存在 |
 | IDE 本地插件 | `~/.cursor/plugins/local/cc-cursor-bridge/` | Reload 之后 IDE 的 Customize 能看到 | worker 会不会加载 local plugin，这次不能验证 |
 
-工作区如果是 `/Users/timon/Sync/Test` 而不是仓库根，嵌套的 `.cursor/skills/` 只在处理 `cc-cursor-bridge/` 下面的文件时出现。
+工作区如果是 `/Users/timon/Sync/Test` 而不是仓库根，仓库里这份嵌套的 `.cursor/skills/` 只在处理 `cc-cursor-bridge/` 下面的文件时出现。要把 skill 装到工作区根上，用：
+
+```bash
+scripts/install_cursor_skill.sh /path/to/workspace
+scripts/install_cursor_skill.sh --uninstall /path/to/workspace
+```
+
+脚本把 `cursor/skills/claude-code-bridge/` 整份（含以后加的 `scripts/`、`references/`）复制到 `<workspace>/.cursor/skills/claude-code-bridge/`，并且只替换这一个目录。工作区是 `/`、`$HOME`，或不存在时会拒绝。`--uninstall` 只删那个目录。本机 worker 的工作区根是 `/Users/timon/Sync/Test`，已用这个脚本装过；该目录不在本仓库的 git 里。
 
 ### 怎么验证
 
