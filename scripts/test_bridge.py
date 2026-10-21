@@ -298,7 +298,8 @@ class BridgeTest(unittest.TestCase):
         for name, groups in hooks["hooks"].items():
             handler = groups[0]["hooks"][0]
             self.assertIn("dispatch.py", handler["command"])
-            self.assertEqual(name in SYNC_EVENTS, "async" not in handler)
+            self.assertNotIn("async", handler)
+            self.assertGreaterEqual(handler["timeout"], 55)
         self.assertFalse((ROOT / "hooks" / "hooks.json").exists())
         self.assertFalse((ROOT / "skills").exists())
         plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
@@ -451,6 +452,50 @@ class BridgeTest(unittest.TestCase):
         self.environ.pop("CC_BRIDGE_PROBE", None)
         result, _ = self.run_pre("Bash", {"command": "echo hi"})
         self.assertEqual(result.stdout, "")
+
+    def test_wait_all_reply_and_timeout(self):
+        self.environ["CC_BRIDGE_WAIT_ALL"] = "1"
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "2"
+
+        def reply():
+            pending = self.bridge_dir / "tasks" / "task1" / "pending"
+            for _ in range(40):
+                files = list(pending.glob("*-PreToolUse.json")) if pending.is_dir() else []
+                if files:
+                    seq = files[0].name.split("-", 1)[0]
+                    target = self.bridge_dir / "tasks" / "task1" / "replies" / f"{seq}.json"
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(json.dumps({"decision": "allow", "reason": "agent"}), encoding="utf-8")
+                    return
+                import time
+                time.sleep(0.05)
+
+        thread = threading.Thread(target=reply)
+        thread.start()
+        result, lines = self.run_pre("Bash", {"command": "echo hi"})
+        thread.join(3)
+        self.assertIn('"allow"', result.stdout)
+        self.assertEqual(lines[-1]["summary"]["wait_all"], "reply")
+
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.2"
+        result, lines = self.run_pre("Write", {"file_path": str(self.cwd / "n.txt"), "content": "x"})
+        self.assertIn('"deny"', result.stdout)
+        self.assertEqual(lines[-1]["summary"]["wait_all"], "timeout")
+
+        previous = os.environ.get("CC_BRIDGE_DIR")
+        os.environ["CC_BRIDGE_DIR"] = str(self.bridge_dir)
+        try:
+            listed = bridge.cli(["pending", "task1"])
+            self.assertEqual(listed.code, 0)
+            self.assertIn("2-PreToolUse.json", listed.stdout)
+            wrote = bridge.cli(["reply", "task1", "99", '{"ack": true}'])
+            self.assertEqual(wrote.code, 0)
+            self.assertTrue((self.bridge_dir / "tasks" / "task1" / "replies" / "99.json").is_file())
+        finally:
+            if previous is None:
+                os.environ.pop("CC_BRIDGE_DIR", None)
+            else:
+                os.environ["CC_BRIDGE_DIR"] = previous
 
 
 if __name__ == "__main__":

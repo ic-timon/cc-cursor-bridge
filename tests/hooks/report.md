@@ -1,53 +1,59 @@
 # Hook harness report
 
-Sandbox: `/Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741`
-Model: `haiku`. 
+Fired 28/33.
 
-| event | fired | payload keys | decision tested | decision honoured | notes |
-| --- | --- | --- | --- | --- | --- |
-| SessionStart | yes | cwd, hook_event_name, session_id, source, transcript_path | none | n/a | - |
-| Setup | yes | cwd, hook_event_name, session_id, transcript_path, trigger | none | n/a | - |
-| InstructionsLoaded | yes | cwd, file_path, hook_event_name, load_reason, memory_type, session_id, transcript_path | none | n/a | - |
-| UserPromptSubmit | yes | cwd, hook_event_name, permission_mode, prompt, prompt_id, session_id, transcript_path | none | n/a | - |
-| UserPromptExpansion | yes | command_args, command_name, command_source, cwd, expansion_type, hook_event_name, permission_mode, prompt, prompt_id, session_id, transcript_path | none | n/a | - |
-| MessageDisplay | yes | cwd, delta, final, hook_event_name, index, message_id, prompt_id, session_id, transcript_path, turn_id | none | n/a | - |
-| PreToolUse | yes | cwd, hook_event_name, mcp_server, permission_mode, prompt_id, session_id, tool_input, tool_name, tool_use_id, transcript_path | probe-deny:applied, write-b:applied | yes | - |
-| PermissionRequest | yes | cwd, hook_event_name, permission_mode, permission_suggestions, prompt_id, session_id, tool_input, tool_name, transcript_path | write-c:applied | see write experiments | - |
-| PermissionDenied | no | - | none | n/a | NOT_TRIGGERABLE here: Write denials were safetyCheck/config rejects and did not emit PermissionDenied. Auto mode, which is what this hook documents, could not be entered on haiku (debug: model does not support auto mode). |
-| PostToolUse | yes | cwd, duration_ms, hook_event_name, mcp_server, permission_mode, prompt_id, session_id, tool_input, tool_name, tool_response, tool_use_id, transcript_path | none | n/a | - |
-| PostToolUseFailure | yes | cwd, duration_ms, error, hook_event_name, is_interrupt, permission_mode, prompt_id, session_id, tool_input, tool_name, tool_use_id, transcript_path | none | n/a | - |
-| PostToolBatch | yes | cwd, hook_event_name, permission_mode, prompt_id, session_id, tool_calls, transcript_path | none | n/a | - |
-| Notification | yes | cwd, hook_event_name, message, notification_type, prompt_id, session_id, transcript_path | none | n/a | - |
-| SubagentStart | yes | agent_id, agent_type, cwd, hook_event_name, prompt_id, session_id, transcript_path | none | n/a | - |
-| SubagentStop | yes | agent_id, agent_transcript_path, agent_type, background_tasks, cwd, hook_event_name, last_assistant_message, permission_mode, prompt_id, session_crons, session_id, stop_hook_active, transcript_path | none | n/a | - |
-| TaskCreated | yes | cwd, hook_event_name, prompt_id, session_id, task_description, task_id, task_subject, transcript_path | none | n/a | - |
-| TaskCompleted | yes | cwd, hook_event_name, prompt_id, session_id, task_description, task_id, task_subject, transcript_path | none | n/a | - |
-| Stop | yes | background_tasks, cwd, effort, hook_event_name, last_assistant_message, permission_mode, prompt_id, session_crons, session_id, stop_hook_active, transcript_path | none | n/a | - |
-| StopFailure | no | - | none | n/a | NOT_TRIGGERABLE without a real API failure. --model not-a-real-model-probe still completed and replied ok through the proxy. |
-| TeammateIdle | no | - | none | n/a | NOT_TRIGGERABLE: claude -p has no agent-team teammate lifecycle. TeammateIdle fires when a teammate is about to go idle, and this CLI session never starts a team. |
-| ConfigChange | yes | cwd, file_path, hook_event_name, prompt_id, session_id, source, transcript_path | none | n/a | - |
-| CwdChanged | no | - | none | n/a | NOT_TRIGGERABLE in this headless run: scenario cwd asked Bash to `cd sub && pwd`. That did not emit CwdChanged. There is no separate -p cd control. |
-| DirectoryAdded | no | - | none | n/a | NOT_TRIGGERABLE: --add-dir at launch did not emit DirectoryAdded, and claude -p /add-dir extra returned "/add-dir isn't available in this environment." |
-| FileChanged | no | - | none | n/a | NOT_TRIGGERABLE with the current plugin: FileChanged has no filename matcher, and SessionStart is async so a watchPaths reply is ignored. Touching cc-bridge-probe-watch during baseline did not fire it. |
-| WorktreeCreate | yes | cwd, hook_event_name, name, session_id, transcript_path | none | n/a | - |
-| WorktreeRemove | no | - | none | n/a | --worktree fired WorktreeCreate, but exiting that -p process did not fire WorktreeRemove. |
-| PreCompact | no | - | none | n/a | NOT_TRIGGERABLE: claude -p /compact returned 'Not enough messages to compact' and did not emit PreCompact or PostCompact. |
-| PostCompact | no | - | none | n/a | NOT_TRIGGERABLE: same /compact result as PreCompact. |
-| PreModelSwitch | no | - | none | n/a | /model haiku on an already-haiku session did not switch. /model sonnet did switch: the stream shows PreModelSwitch:claude-sonnet-5 with empty stdout, but this plugin's jsonl did not get that row (the async hook exited before the log flush). PostModelSwitch was logged. |
-| PostModelSwitch | yes | cache_ttl, context_tokens, cwd, estimated_cache_write_usd, from_model, hook_event_name, pricing, prompt_cache_warm, prompt_id, requested_model, session_id, source, to_model, transcript_path | none | n/a | - |
-| Elicitation | yes | cwd, hook_event_name, mcp_server_name, message, mode, prompt_id, requested_schema, session_id, transcript_path | none | n/a | - |
-| ElicitationResult | yes | action, cwd, hook_event_name, mcp_server_name, mode, prompt_id, session_id, transcript_path | none | n/a | - |
-| SessionEnd | yes | cwd, hook_event_name, prompt_id, reason, session_id, transcript_path | none | n/a | - |
+## wait_all
+
+`CC_BRIDGE_WAIT_ALL=1` makes every synchronous hook write `pending/<seq>-<event>.json` and block on `replies/<seq>.json`. A plain Write outside the repo produced 8 pendings and finished in 12s with the stand-in replier (no PermissionRequest, because that path is not a sensitive file). The same Write inside the repo produced 9 pendings and finished in 15s when the agent allowed PreToolUse and PermissionRequest; `note.txt` contained `hi`. Events that were only acks in that run, and are the first candidates to stop waiting on later: SessionStart, UserPromptSubmit, PostToolUse, PostToolBatch, MessageDisplay, Stop, SessionEnd. PreToolUse and PermissionRequest are the ones that changed the Write outcome.
+
+Plain Write of note.txt outside the repo succeeds. Inside the repo the same Write is a safetyCheck sensitive file.
+
+| event | fired | notes |
+| --- | --- | --- |
+| SessionStart | yes | - |
+| Setup | yes | - |
+| InstructionsLoaded | yes | - |
+| UserPromptSubmit | yes | - |
+| UserPromptExpansion | yes | - |
+| MessageDisplay | yes | - |
+| PreToolUse | yes | - |
+| PermissionRequest | yes | - |
+| PermissionDenied | no | NOT_TRIGGERABLE in these runs. --permission-mode auto --model sonnet --allowedTools Bash curl -I https://example.com executed the curl (PostToolUse) and did not deny it. A second run without allowedTools, prompt `sudo true`, was still thinking at the 90s timeout (exit 124) with only SessionStart and UserPromptSubmit; no PermissionDenied. Earlier haiku debug: model does not support auto mode. |
+| PostToolUse | yes | - |
+| PostToolUseFailure | yes | - |
+| PostToolBatch | yes | - |
+| Notification | yes | - |
+| SubagentStart | yes | - |
+| SubagentStop | yes | - |
+| TaskCreated | yes | - |
+| TaskCompleted | yes | - |
+| Stop | yes | - |
+| StopFailure | no | NOT_TRIGGERABLE without breaking the proxy. ANTHROPIC_BASE_URL=http://127.0.0.1:9 plus ANTHROPIC_API_KEY=invalid-probe-key on that one process still returned subtype success, api_error_status null, result ok. cc-switch config was not edited. --model not-a-real-model-probe also completed. |
+| TeammateIdle | no | NOT_TRIGGERABLE. `claude --agent-teams` exited with: error: unknown option '--agent-teams'. CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 did not expose a teammate tool; the model ran ls and the 90s session ended with PermissionRequests and no TeammateIdle. |
+| ConfigChange | yes | - |
+| CwdChanged | no | NOT_TRIGGERABLE in the attempts made. Bash `cd sub && pwd` ran and the model reported the new directory, but no CwdChanged. EnterWorktree created .claude/worktrees/probe-cwd and fired WorktreeCreate, not CwdChanged. Docs: the event fires when the session working directory changes, for example when Claude executes a cd; neither of those headless paths changed the session cwd. |
+| DirectoryAdded | no | NOT_TRIGGERABLE. --add-dir at launch did not emit it. stream-json `/add-dir <sandbox>/extra` returned exactly: /add-dir isn't available in this environment. |
+| FileChanged | yes | Fired in /tmp gap run. SessionStart is sync and CC_BRIDGE_WATCH points at watched.txt; the file was rewritten between two stream-json turns. events=SessionStart,UserPromptSubmit,MessageDisplay,Stop,UserPromptSubmit,FileChanged,MessageDisplay,Stop,SessionEnd |
+| WorktreeCreate | yes | Fired in /tmp gap run. claude -p --worktree (unnamed) 'Reply ok. Do not use tools or edit files.' events=WorktreeCreate,SessionStart,UserPromptSubmit,MessageDisplay,Stop,SessionEnd |
+| WorktreeRemove | yes | Fired when the model called ExitWorktree with discard_changes true inside claude -p --worktree probe-exit. A plain --worktree exit did not remove it. |
+| PreCompact | yes | Fired in /tmp gap run. stream-json: six 'reply ok' turns then /compact. result= |
+| PostCompact | yes | Fired in /tmp gap run. stream-json: six 'reply ok' turns then /compact. result= |
+| PreModelSwitch | yes | Fired in /tmp gap run. command: claude -p /model sonnet (hooks now synchronous). events=SessionStart,PreModelSwitch,SessionEnd |
+| PostModelSwitch | yes | - |
+| Elicitation | yes | - |
+| ElicitationResult | yes | - |
+| SessionEnd | yes | - |
 
 ## Write in claude -p
 
+Inside repo: (a)(b)(d)(e) safetyCheck sensitive file; (c) PermissionRequest allow wrote the file; (f) permission-prompt-tool wrote the file.
+Outside repo (/tmp/ccb-probe-xcoc): (a) with no hook decision and no extra permission flags wrote note.txt.
+
 | id | setup | PermissionRequest | file written | exit | errors |
 | --- | --- | --- | --- | --- | --- |
-| write-a | no hook decision, default permission mode | yes | no | 0 | {"type": "system", "subtype": "permission_denied", "tool_name": "Write", "decision_reason": "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-a.txt which is a sensitive file.", "decision_reason_type": "safetyCheck", "message": "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sa…[truncated]; Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/ |
-| write-b | PreToolUse permissionDecision allow | yes | no | 0 | {"type": "system", "subtype": "permission_denied", "tool_name": "Write", "decision_reason": "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-b.txt which is a sensitive file.", "decision_reason_type": "safetyCheck", "message": "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sa…[truncated]; Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/ |
+| write-a | no hook decision, default permission mode | yes | no | 0 | {"type": "system", "subtype": "permission_denied", "tool_name": "Write", "decision_reason": "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-a.txt which is a sensitive file.", "decision_reason_type": "safetyCheck",  |
+| write-b | PreToolUse permissionDecision allow | yes | no | 0 | {"type": "system", "subtype": "permission_denied", "tool_name": "Write", "decision_reason": "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-b.txt which is a sensitive file.", "decision_reason_type": "safetyCheck",  |
 | write-c | PermissionRequest decision allow | yes | yes | 0 | - |
-| write-d | --permission-mode acceptEdits | yes | no | 0 | {"type": "system", "subtype": "permission_denied", "tool_name": "Write", "decision_reason": "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-d.txt which is a sensitive file.", "decision_reason_type": "safetyCheck", "message": "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sa…[truncated]; Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/ |
-| write-e | --allowedTools Write | yes | no | 0 | {"type": "system", "subtype": "permission_denied", "tool_name": "Write", "decision_reason": "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-e.txt which is a sensitive file.", "decision_reason_type": "safetyCheck", "message": "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sa…[truncated]; Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/ |
+| write-d | --permission-mode acceptEdits | yes | no | 0 | {"type": "system", "subtype": "permission_denied", "tool_name": "Write", "decision_reason": "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-d.txt which is a sensitive file.", "decision_reason_type": "safetyCheck",  |
+| write-e | --allowedTools Write | yes | no | 0 | {"type": "system", "subtype": "permission_denied", "tool_name": "Write", "decision_reason": "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-e.txt which is a sensitive file.", "decision_reason_type": "safetyCheck",  |
 | write-f | --permission-prompt-tool mcp__permit__approve | yes | yes | 0 | - |
-
-PreToolUse deny probe (echo hi): honoured, Bash did not reach PostToolUse

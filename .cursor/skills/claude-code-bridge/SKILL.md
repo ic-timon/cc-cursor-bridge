@@ -87,6 +87,44 @@ tail -n +1 -f "$CC_BRIDGE_DIR/tasks/$CC_TASK_ID/events.jsonl"
 
 ## 回复 pending
 
+33 个 hook 都已注册成同步命令，这样打开等待时脚本能拦住 Claude Code，直到你写回复。Claude Code 的命令 hook 默认超时上限：一般事件可以设到 600 秒；UserPromptSubmit、PreModelSwitch、PostModelSwitch 在不写 timeout 时默认被降到 30 秒，MessageDisplay 降到 10 秒；SessionEnd 共享预算最高 60 秒。本插件显式写了 timeout：普通事件 180 秒，SessionEnd 55 秒。等待超时要小于这些值。
+
+全事件等待默认关。要让你来批每一次事件，启动前设：
+
+```bash
+export CC_BRIDGE_WAIT_ALL=1
+export CC_BRIDGE_WAIT_ALL_TIMEOUT=90
+```
+
+对应配置是 `config/bridge.json` 的 `wait_all.enabled`。打开之后每个事件写：
+
+`$CC_BRIDGE_DIR/tasks/$CC_TASK_ID/pending/<seq>-<事件名>.json`
+
+并阻塞轮询：
+
+`$CC_BRIDGE_DIR/tasks/$CC_TASK_ID/replies/<seq>.json`
+
+`claude -p` 必须放后台，否则第一个 SessionStart 就会把你自己卡住。然后循环：
+
+```bash
+python3 /path/to/cc-cursor-bridge/scripts/bridge.py pending "$CC_TASK_ID"
+python3 /path/to/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '<json>'
+```
+
+回复是一个 JSON 对象：
+
+- PreToolUse：`{"decision":"allow|deny|ask|defer","reason":"...","updatedInput":{...}}`
+- PermissionRequest：`{"decision":"allow|deny","message":"...","updatedInput":{...}}`
+- Stop、SubagentStop、PreCompact、TeammateIdle、TaskCreated、TaskCompleted：`{"decision":"block","reason":"..."}` 或 `{"ack":true}`
+- UserPromptSubmit、UserPromptExpansion、PostToolUse：`{"decision":"block","reason":"..."}` 和/或 `{"additionalContext":"..."}`
+- Elicitation、ElicitationResult：`{"decision":"accept|decline"}`
+- WorktreeCreate：`{"worktreePath":"/absolute/path"}`，或 `{"ack":true}` 沿用 hook 已经建好的 git worktree
+- 没有决定权的事件：`{"ack":true}`
+
+超时：PreToolUse 和 PermissionRequest 默认 deny；其他事件当没回复，不改 Claude Code 的原行为。
+
+旧的窄等待仍然可用：`CC_BRIDGE_WAIT=1` 只在 PermissionRequest 上等，`CC_BRIDGE_WAIT_PRE_TOOL=1` 才加上 PreToolUse。文件名是 `pending/<id>.json`，不是 seq。
+
 等待模式默认关。关着的时候 PermissionRequest 只记日志，决定权在 Claude Code 自己的权限模式；PreToolUse 只在命中规则时 deny。
 
 要让你来批，启动前打开等待（二选一）：
@@ -120,7 +158,7 @@ notifier 默认关，而且当前版本即使打开也只把打算发给 Cursor 
 2. `stream-json` 里 `"type":"result"` 的那一行（成功时 `subtype` 一般为 `success`，失败时 `is_error` 为 true）。
 3. 事件日志里的 `Stop`，随后应有同步写入的 `SessionEnd`。
 
-`Stop` 是同步 hook。其它观察类事件多数是 `async: true`，在 `-p` 结束时若还没写完可能被取消，所以不要只靠某一条异步日志判断结束。
+全部 hook 都是同步的，日志会在 hook 返回前写完。`wait_all` 打开时，没写回复之前进程会停在对应事件上。
 
 ## 出错怎么办
 

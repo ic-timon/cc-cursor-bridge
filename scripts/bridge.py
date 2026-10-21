@@ -122,6 +122,11 @@ def default_config() -> dict:
             "timeout_decision": "deny",
         },
         "log": {"max_field_chars": 240},
+        "wait_all": {
+            "enabled": False,
+            "timeout_seconds": 120,
+            "poll_interval_seconds": 0.25,
+        },
     }
 
 
@@ -163,7 +168,7 @@ def load_config(root: Path, environ: dict) -> Tuple[dict, str]:
         return cfg, f"配置文件无法解析，已回退到内置配置: {exc}"
     if not isinstance(data, dict):
         return cfg, "配置文件不是对象，已回退到内置配置"
-    for key in ("notifier", "wait", "log"):
+    for key in ("notifier", "wait", "wait_all", "log"):
         if isinstance(data.get(key), dict):
             cfg[key].update(data[key])
     return cfg, ""
@@ -517,12 +522,14 @@ def append_record(path: Path, record: dict, before_write: Optional[Callable[[dic
         try:
             handle.seek(0)
             existing = [line for line in handle.read().splitlines() if line.strip()]
-            record["seq"] = len(existing) + 1
+            if not record.get("seq"):
+                record["seq"] = len(existing) + 1
             if before_write is not None:
                 before_write(record)
             handle.seek(0, os.SEEK_END)
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
             handle.flush()
+            os.fsync(handle.fileno())
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
@@ -628,6 +635,191 @@ def wait_for_reply(task_dir: Path, request_id: str, pending_body: dict, wait: di
         if time.monotonic() >= deadline:
             return str(default), "等待回复超时", "timeout"
         time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+
+
+def wait_all_settings(cfg: dict, environ: dict) -> dict:
+    block = dict((cfg.get("wait_all") or {}))
+    block["enabled"] = env_flag(environ, "CC_BRIDGE_WAIT_ALL", bool(block.get("enabled")))
+    if environ.get("CC_BRIDGE_WAIT_ALL_TIMEOUT"):
+        block["timeout_seconds"] = float(environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"])
+    return block
+
+
+def reserve_seq(task_dir: Path) -> int:
+    task_dir.mkdir(parents=True, exist_ok=True)
+    path = task_dir / "seq"
+    with path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            handle.seek(0)
+            raw = handle.read().strip()
+            current = int(raw) if raw.isdigit() else 0
+            nxt = current + 1
+            handle.seek(0)
+            handle.truncate()
+            handle.write(str(nxt))
+            handle.flush()
+            os.fsync(handle.fileno())
+            return nxt
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+REPLY_HINTS = {
+    "PreToolUse": "decision allow|deny|ask|defer, optional reason, updatedInput, additionalContext",
+    "PermissionRequest": "decision allow|deny, optional message/reason, updatedInput",
+    "UserPromptSubmit": "decision block and/or additionalContext",
+    "UserPromptExpansion": "decision block and/or additionalContext",
+    "Stop": "decision block plus reason, or ack",
+    "SubagentStop": "decision block plus reason, or ack",
+    "PreCompact": "decision block plus reason, or ack",
+    "PreModelSwitch": "decision allow|deny|ask plus reason, or ack",
+    "PostToolUse": "additionalContext and/or decision block, or ack",
+    "Elicitation": "decision accept|decline, optional content",
+    "ElicitationResult": "decision accept|decline",
+    "WorktreeCreate": "worktreePath absolute path, or ack to keep the git worktree this hook created",
+    "MessageDisplay": "displayContent, or ack",
+    "SessionStart": "additionalContext and/or watchPaths, or ack",
+    "TeammateIdle": "decision block plus reason, or ack",
+}
+
+
+def reply_hint(event_name: str) -> str:
+    return REPLY_HINTS.get(event_name, "ack true; this event has no decision control")
+
+
+def watch_paths_from_env(environ: dict) -> List[str]:
+    raw = environ.get("CC_BRIDGE_WATCH") or ""
+    return [part for part in raw.split(os.pathsep) if part]
+
+
+def poll_reply_file(path: Path, timeout: float, interval: float) -> Tuple[Optional[dict], str]:
+    deadline = time.monotonic() + max(0.0, timeout)
+    while True:
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                data = None
+            if isinstance(data, dict):
+                return data, "reply"
+        if time.monotonic() >= deadline:
+            return None, "timeout"
+        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+
+
+def timeout_result(event_name: str) -> Tuple[str, int, str, str]:
+    if event_name == "PreToolUse":
+        return decision_stdout(event_name, "deny", "等待回复超时"), 0, "", "timeout-deny"
+    if event_name == "PermissionRequest":
+        body = {
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {"behavior": "deny", "message": "等待回复超时"},
+            }
+        }
+        return json.dumps(body, ensure_ascii=False) + "\n", 0, "", "timeout-deny"
+    return "", 0, "", "timeout-noop"
+
+
+def apply_reply(event_name: str, reply: dict) -> Tuple[str, int, str, str]:
+    decision = str(reply.get("decision") or reply.get("behavior") or "").lower()
+    reason = str(reply.get("reason") or reply.get("message") or "")
+    if event_name == "PreToolUse" and decision in ("allow", "deny", "ask", "defer"):
+        hook: Dict[str, Any] = {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": decision,
+            "permissionDecisionReason": reason,
+        }
+        if "updatedInput" in reply:
+            hook["updatedInput"] = reply["updatedInput"]
+        if reply.get("additionalContext"):
+            hook["additionalContext"] = reply["additionalContext"]
+        return json.dumps({"hookSpecificOutput": hook}, ensure_ascii=False) + "\n", 0, "", decision
+    if event_name == "PermissionRequest" and decision in ("allow", "deny"):
+        decided: Dict[str, Any] = {"behavior": decision}
+        if decision == "deny" and reason:
+            decided["message"] = reason
+        if "updatedInput" in reply:
+            decided["updatedInput"] = reply["updatedInput"]
+        body = {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": decided}}
+        return json.dumps(body, ensure_ascii=False) + "\n", 0, "", decision
+    if event_name == "PreModelSwitch" and decision in ("allow", "deny", "ask"):
+        hook = {
+            "hookEventName": "PreModelSwitch",
+            "permissionDecision": decision,
+            "permissionDecisionReason": reason,
+        }
+        return json.dumps({"hookSpecificOutput": hook}, ensure_ascii=False) + "\n", 0, "", decision
+    if event_name in ("Elicitation", "ElicitationResult") and decision in ("accept", "decline", "allow", "deny"):
+        action = "accept" if decision in ("accept", "allow") else "decline"
+        hook = {"hookEventName": event_name, "action": action}
+        if "content" in reply:
+            hook["content"] = reply["content"]
+        return json.dumps({"hookSpecificOutput": hook}, ensure_ascii=False) + "\n", 0, "", action
+    if event_name == "WorktreeCreate" and reply.get("worktreePath"):
+        return str(reply["worktreePath"]).rstrip() + "\n", 0, "", "path"
+    if event_name == "MessageDisplay" and reply.get("displayContent") is not None:
+        hook = {"hookEventName": "MessageDisplay", "displayContent": reply["displayContent"]}
+        return json.dumps({"hookSpecificOutput": hook}, ensure_ascii=False) + "\n", 0, "", "display"
+    block_events = (
+        "Stop",
+        "SubagentStop",
+        "PreCompact",
+        "UserPromptSubmit",
+        "UserPromptExpansion",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "TeammateIdle",
+        "TaskCreated",
+        "TaskCompleted",
+    )
+    body: Dict[str, Any] = {}
+    label = "ack"
+    if event_name in block_events and decision == "block":
+        body["decision"] = "block"
+        body["reason"] = reason or "blocked"
+        label = "block"
+    context = reply.get("additionalContext")
+    watch = reply.get("watchPaths")
+    if event_name == "SessionStart" and (context or watch):
+        hook = {"hookEventName": "SessionStart"}
+        if context:
+            hook["additionalContext"] = context
+        if watch:
+            hook["watchPaths"] = watch
+        body["hookSpecificOutput"] = hook
+        label = "session"
+    elif context and event_name in block_events + ("SessionStart", "PostToolUse", "PostToolUseFailure"):
+        body["hookSpecificOutput"] = {"hookEventName": event_name, "additionalContext": context}
+        if label == "ack":
+            label = "context"
+    if body:
+        return json.dumps(body, ensure_ascii=False) + "\n", 0, "", label
+    return "", 0, "", "ack"
+
+
+def inject_watch_paths(stdout: str, paths: List[str]) -> str:
+    if not paths:
+        return stdout
+    if not stdout.strip():
+        body = {"hookSpecificOutput": {"hookEventName": "SessionStart", "watchPaths": paths}}
+        return json.dumps(body) + "\n"
+    try:
+        parsed = json.loads(stdout)
+    except json.JSONDecodeError:
+        return stdout
+    hook = parsed.get("hookSpecificOutput")
+    if not isinstance(hook, dict):
+        hook = {"hookEventName": "SessionStart"}
+        parsed["hookSpecificOutput"] = hook
+    existing = hook.get("watchPaths") if isinstance(hook.get("watchPaths"), list) else []
+    merged = list(existing)
+    for path in paths:
+        if path not in merged:
+            merged.append(path)
+    hook["watchPaths"] = merged
+    return json.dumps(parsed) + "\n"
 
 
 def spec_matches(spec: dict, event: dict) -> bool:
@@ -894,13 +1086,17 @@ def handle_event(
         "home": home,
         "rule_errors": [],
     }
+    wait_all = wait_all_settings(cfg, environ)
     if event_name == "PreToolUse":
         matched = first_deny(rules, ctx)
         if matched:
-            decision = "deny"
-            reason = str(matched.get("reason") or matched.get("id") or "denied")
             rule_id = str(matched.get("id") or "")
-            stdout = decision_stdout(event_name, decision, reason)
+            if not wait_all.get("enabled"):
+                decision = "deny"
+                reason = str(matched.get("reason") or rule_id or "denied")
+                stdout = decision_stdout(event_name, decision, reason)
+            else:
+                summary["rule_would_deny"] = rule_id
     if ctx["rule_errors"]:
         summary["rule_errors"] = truncate("; ".join(ctx["rule_errors"]), limit, secrets)
 
@@ -917,8 +1113,61 @@ def handle_event(
     elif probe_stdout is not None:
         summary["probe"] = "ignored_for_worktree_protocol"
 
+    directory = task_dir_for(event, environ)
+    if probe_stdout is None and wait_all.get("enabled"):
+        seq = reserve_seq(directory)
+        pending_id = str(seq)
+        pending_body = {
+            "seq": seq,
+            "event": event_name,
+            "session_id": event.get("session_id") or "",
+            "cwd": event.get("cwd") or "",
+            "tool_name": tool_name,
+            "tool_input": pending_input(tool_input, max(limit, 400), secrets),
+            "summary": summary,
+            "input_keys": sorted(str(key) for key in event.keys()),
+            "rule_would_deny": rule_id or None,
+            "reply_file": f"replies/{seq}.json",
+            "reply_hint": reply_hint(event_name),
+            "created_at": local_iso(),
+        }
+        if event_name == "WorktreeCreate" and stdout.strip():
+            pending_body["worktreePath"] = stdout.strip()
+        pending_path = directory / "pending" / f"{seq}-{event_name}.json"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = pending_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(pending_body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(pending_path)
+        reply, via = poll_reply_file(
+            directory / "replies" / f"{seq}.json",
+            float(wait_all.get("timeout_seconds", 120)),
+            float(wait_all.get("poll_interval_seconds", 0.25)),
+        )
+        summary["wait_all"] = via
+        if reply is None:
+            timed_out, code, extra, decision = timeout_result(event_name)
+            if event_name == "WorktreeCreate" and stdout.strip() and decision == "timeout-noop":
+                pass
+            else:
+                stdout = timed_out
+            if extra:
+                stderr += extra
+            reason = "等待回复超时" if decision == "timeout-deny" else ""
+        else:
+            answered, code, extra, decision = apply_reply(event_name, reply)
+            if extra:
+                stderr += extra
+            if event_name == "WorktreeCreate" and decision != "path":
+                pass
+            else:
+                stdout = answered
+            reason = str(reply.get("reason") or reply.get("message") or "")
+        record_seq = seq
+    else:
+        record_seq = 0
+
     wait = wait_settings(cfg, environ)
-    if probe_stdout is None and should_wait(event_name, wait, decision == "deny"):
+    if probe_stdout is None and not wait_all.get("enabled") and should_wait(event_name, wait, decision == "deny"):
         pending_id = safe_file_id(str(event.get("tool_use_id") or ""))
         directory = task_dir_for(event, environ)
         pending_body = {
@@ -941,6 +1190,10 @@ def handle_event(
         "input_keys": sorted(str(key) for key in event.keys()),
         "summary": summary,
     }
+    if record_seq:
+        record["seq"] = record_seq
+    if event_name == "SessionStart":
+        stdout = inject_watch_paths(stdout, watch_paths_from_env(environ))
     if event.get("prompt_id"):
         record["prompt_id"] = str(event["prompt_id"])[:80]
     if decision:
@@ -967,7 +1220,51 @@ def handle_event(
     return HookResult(stdout=stdout, stderr=stderr, code=code)
 
 
+def bridge_root_from_env() -> Path:
+    return Path(os.environ.get("CC_BRIDGE_DIR") or (Path.home() / ".cc-bridge")).expanduser()
+
+
+def cli(argv: List[str]) -> HookResult:
+    if not argv or argv[0] not in ("pending", "reply"):
+        return HookResult(stderr="usage: bridge.py pending <task> | reply <task> <seq> <json>\n", code=2)
+    if argv[0] == "pending":
+        if len(argv) != 2:
+            return HookResult(stderr="usage: bridge.py pending <task>\n", code=2)
+        task = safe_component(argv[1]) or ""
+        if not task:
+            return HookResult(stderr="bad task id\n", code=2)
+        pending = bridge_root_from_env() / "tasks" / task / "pending"
+        replies = bridge_root_from_env() / "tasks" / task / "replies"
+        if not pending.is_dir():
+            return HookResult(stdout="")
+        lines = []
+        for path in sorted(pending.glob("*.json")):
+            seq = path.name.split("-", 1)[0]
+            if not (replies / f"{seq}.json").is_file():
+                lines.append(str(path))
+        return HookResult(stdout=("\n".join(lines) + ("\n" if lines else "")))
+    if len(argv) != 4:
+        return HookResult(stderr="usage: bridge.py reply <task> <seq> <json>\n", code=2)
+    task = safe_component(argv[1]) or ""
+    if not task or not argv[2].isdigit():
+        return HookResult(stderr="bad task id or seq\n", code=2)
+    try:
+        payload = json.loads(argv[3])
+    except json.JSONDecodeError as exc:
+        return HookResult(stderr=f"reply is not JSON: {exc}\n", code=2)
+    if not isinstance(payload, dict):
+        return HookResult(stderr="reply JSON must be an object\n", code=2)
+    dest = bridge_root_from_env() / "tasks" / task / "replies" / f"{argv[2]}.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    temporary = dest.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    temporary.replace(dest)
+    return HookResult(stdout=str(dest) + "\n")
+
+
 def main() -> HookResult:
+    if len(sys.argv) > 1 and sys.argv[1] in ("pending", "reply"):
+        return cli(sys.argv[1:])
     raw = sys.stdin.read()
     if not raw.strip():
         return HookResult()

@@ -24,5 +24,10 @@
   },
   "log": {
     "max_field_chars": 240
+  },
+  "wait_all": {
+    "enabled": false,
+    "timeout_seconds": 120,
+    "poll_interval_seconds": 0.25
   }
 }

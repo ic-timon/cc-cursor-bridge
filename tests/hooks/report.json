@@ -298,7 +298,7 @@
       "payload_keys": [],
       "decision_tested": "none",
       "decision_honoured": "n/a",
-      "notes": "NOT_TRIGGERABLE here: Write denials were safetyCheck/config rejects and did not emit PermissionDenied. Auto mode, which is what this hook documents, could not be entered on haiku (debug: model does not support auto mode)."
+      "notes": "NOT_TRIGGERABLE in these runs. --permission-mode auto --model sonnet --allowedTools Bash curl -I https://example.com executed the curl (PostToolUse) and did not deny it. A second run without allowedTools, prompt `sudo true`, was still thinking at the 90s timeout (exit 124) with only SessionStart and UserPromptSubmit; no PermissionDenied. Earlier haiku debug: model does not support auto mode."
     },
     {
       "event": "PostToolUse",
@@ -553,7 +553,7 @@
       "payload_keys": [],
       "decision_tested": "none",
       "decision_honoured": "n/a",
-      "notes": "NOT_TRIGGERABLE without a real API failure. --model not-a-real-model-probe still completed and replied ok through the proxy."
+      "notes": "NOT_TRIGGERABLE without breaking the proxy. ANTHROPIC_BASE_URL=http://127.0.0.1:9 plus ANTHROPIC_API_KEY=invalid-probe-key on that one process still returned subtype success, api_error_status null, result ok. cc-switch config was not edited. --model not-a-real-model-probe also completed."
     },
     {
       "event": "TeammateIdle",
@@ -562,7 +562,7 @@
       "payload_keys": [],
       "decision_tested": "none",
       "decision_honoured": "n/a",
-      "notes": "NOT_TRIGGERABLE: claude -p has no agent-team teammate lifecycle. TeammateIdle fires when a teammate is about to go idle, and this CLI session never starts a team."
+      "notes": "NOT_TRIGGERABLE. `claude --agent-teams` exited with: error: unknown option '--agent-teams'. CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 did not expose a teammate tool; the model ran ls and the 90s session ended with PermissionRequests and no TeammateIdle."
     },
     {
       "event": "ConfigChange",
@@ -590,7 +590,7 @@
       "payload_keys": [],
       "decision_tested": "none",
       "decision_honoured": "n/a",
-      "notes": "NOT_TRIGGERABLE in this headless run: scenario cwd asked Bash to `cd sub && pwd`. That did not emit CwdChanged. There is no separate -p cd control."
+      "notes": "NOT_TRIGGERABLE in the attempts made. Bash `cd sub && pwd` ran and the model reported the new directory, but no CwdChanged. EnterWorktree created .claude/worktrees/probe-cwd and fired WorktreeCreate, not CwdChanged. Docs: the event fires when the session working directory changes, for example when Claude executes a cd; neither of those headless paths changed the session cwd."
     },
     {
       "event": "DirectoryAdded",
@@ -599,22 +599,25 @@
       "payload_keys": [],
       "decision_tested": "none",
       "decision_honoured": "n/a",
-      "notes": "NOT_TRIGGERABLE: --add-dir at launch did not emit DirectoryAdded, and claude -p /add-dir extra returned \"/add-dir isn't available in this environment.\""
+      "notes": "NOT_TRIGGERABLE. --add-dir at launch did not emit it. stream-json `/add-dir <sandbox>/extra` returned exactly: /add-dir isn't available in this environment."
     },
     {
       "event": "FileChanged",
-      "fired": false,
-      "tasks": [],
+      "fired": true,
+      "tasks": [
+        "gap:FileChanged"
+      ],
       "payload_keys": [],
       "decision_tested": "none",
       "decision_honoured": "n/a",
-      "notes": "NOT_TRIGGERABLE with the current plugin: FileChanged has no filename matcher, and SessionStart is async so a watchPaths reply is ignored. Touching cc-bridge-probe-watch during baseline did not fire it."
+      "notes": "Fired in /tmp gap run. SessionStart is sync and CC_BRIDGE_WATCH points at watched.txt; the file was rewritten between two stream-json turns. events=SessionStart,UserPromptSubmit,MessageDisplay,Stop,UserPromptSubmit,FileChanged,MessageDisplay,Stop,SessionEnd"
     },
     {
       "event": "WorktreeCreate",
       "fired": true,
       "tasks": [
-        "worktree"
+        "worktree",
+        "gap:WorktreeCreate"
       ],
       "payload_keys": [
         "cwd",
@@ -625,43 +628,49 @@
       ],
       "decision_tested": "none",
       "decision_honoured": "n/a",
-      "notes": ""
+      "notes": "Fired in /tmp gap run. claude -p --worktree (unnamed) 'Reply ok. Do not use tools or edit files.' events=WorktreeCreate,SessionStart,UserPromptSubmit,MessageDisplay,Stop,SessionEnd"
     },
     {
       "event": "WorktreeRemove",
-      "fired": false,
+      "fired": true,
       "tasks": [],
       "payload_keys": [],
       "decision_tested": "none",
       "decision_honoured": "n/a",
-      "notes": "--worktree fired WorktreeCreate, but exiting that -p process did not fire WorktreeRemove."
+      "notes": "Fired when the model called ExitWorktree with discard_changes true inside claude -p --worktree probe-exit. A plain --worktree exit did not remove it."
     },
     {
       "event": "PreCompact",
-      "fired": false,
-      "tasks": [],
+      "fired": true,
+      "tasks": [
+        "gap:PreCompact"
+      ],
       "payload_keys": [],
       "decision_tested": "none",
       "decision_honoured": "n/a",
-      "notes": "NOT_TRIGGERABLE: claude -p /compact returned 'Not enough messages to compact' and did not emit PreCompact or PostCompact."
+      "notes": "Fired in /tmp gap run. stream-json: six 'reply ok' turns then /compact. result="
     },
     {
       "event": "PostCompact",
-      "fired": false,
-      "tasks": [],
+      "fired": true,
+      "tasks": [
+        "gap:PostCompact"
+      ],
       "payload_keys": [],
       "decision_tested": "none",
       "decision_honoured": "n/a",
-      "notes": "NOT_TRIGGERABLE: same /compact result as PreCompact."
+      "notes": "Fired in /tmp gap run. stream-json: six 'reply ok' turns then /compact. result="
     },
     {
       "event": "PreModelSwitch",
-      "fired": false,
-      "tasks": [],
+      "fired": true,
+      "tasks": [
+        "gap:PreModelSwitch"
+      ],
       "payload_keys": [],
       "decision_tested": "none",
       "decision_honoured": "n/a",
-      "notes": "/model haiku on an already-haiku session did not switch. /model sonnet did switch: the stream shows PreModelSwitch:claude-sonnet-5 with empty stdout, but this plugin's jsonl did not get that row (the async hook exited before the log flush). PostModelSwitch was logged."
+      "notes": "Fired in /tmp gap run. command: claude -p /model sonnet (hooks now synchronous). events=SessionStart,PreModelSwitch,SessionEnd"
     },
     {
       "event": "PostModelSwitch",
@@ -1244,5 +1253,11 @@
       ],
       "errors": []
     }
-  ]
+  ],
+  "sensitive_file": {
+    "inside_repo": "Write of a plain txt under the cc-cursor-bridge repo was denied by safetyCheck: 'Claude requested permissions to edit <path> which is a sensitive file.'",
+    "outside_repo": "Same Write, no permission flags, cwd /tmp/ccb-probe-xcoc, created note.txt with content hi. The sensitive-file check is about the repo path, not about -p itself."
+  },
+  "gap_sandbox": "/var/folders/rh/rvrgg5zs0mb7c939kdr7hns40000gn/T/ccb-gap-uw1rylvb",
+  "fired_count": 28
 }

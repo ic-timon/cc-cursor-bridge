@@ -128,7 +128,7 @@ Grep 的搜索 pattern 不参与判断，只看 `path` 和 `glob`，避免搜源
 
 ### 事件清单
 
-同步的是要做决定、要返回 worktree 路径，或处在进程收尾、不能丢的事件。其余 `async: true`，避免拖慢 Claude Code。`-p` 结束时还没写完的异步 hook 可能被取消。
+33 个 hook 全部同步注册，超时普通事件 180 秒、SessionEnd 55 秒（官方 SessionEnd 预算最高 60 秒；UserPromptSubmit / PreModelSwitch / PostModelSwitch 不写 timeout 时默认只有 30 秒，MessageDisplay 只有 10 秒，所以这里显式写了更大的 timeout）。`wait_all` 关掉时脚本记完日志就返回。`CC_BRIDGE_WAIT_ALL=1` 时每个事件写 `pending/<seq>-<事件>.json` 并等到 `replies/<seq>.json`。超时对 PreToolUse 和 PermissionRequest 默认 deny，其余事件不改决定。助手命令：`python3 scripts/bridge.py pending <task>` 和 `reply <task> <seq> <json>`。
 
 | 事件 | 模式 | 现在做什么 |
 | --- | --- | --- |
