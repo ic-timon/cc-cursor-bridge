@@ -1,12 +1,14 @@
 #!/bin/sh
-# Copy cursor/skills/claude-code-bridge/ into <workspace_root>/.cursor/skills/.
-# Idempotent. Replaces only that skill directory. Refuses /, $HOME, and missing paths.
+# Copy cursor/skills/claude-code-bridge/ into a workspace or into ~/.agents/skills.
+# Idempotent. Replaces only that skill directory.
+# Workspace mode refuses /, $HOME, and missing paths.
 set -eu
 
 SKILL_NAME=claude-code-bridge
 
 usage() {
   echo "usage: install_cursor_skill.sh [--uninstall] <workspace_root>" >&2
+  echo "       install_cursor_skill.sh --user [--uninstall]" >&2
   exit 2
 }
 
@@ -21,12 +23,16 @@ resolve_dir() {
 }
 
 uninstall=0
+user_mode=0
 workspace=
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --uninstall)
       uninstall=1
+      ;;
+    --user)
+      user_mode=1
       ;;
     --help|-h)
       usage
@@ -50,36 +56,53 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-if [ -z "$workspace" ]; then
-  usage
-fi
-
-if [ ! -d "$workspace" ]; then
-  die "workspace does not exist: $workspace"
-fi
-
-workspace_real=$(resolve_dir "$workspace") || die "cannot resolve $workspace"
-home_real=$(resolve_dir "$HOME") || die "cannot resolve \$HOME"
-
-if [ "$workspace_real" = "/" ]; then
-  die "workspace_root is /"
-fi
-if [ "$workspace_real" = "$home_real" ]; then
-  die "workspace_root is \$HOME ($home_real)"
-fi
-
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 src="$repo_root/cursor/skills/$SKILL_NAME"
-dest="$workspace_real/.cursor/skills/$SKILL_NAME"
+home_real=$(resolve_dir "$HOME") || die "cannot resolve \$HOME"
+if [ "$home_real" = "/" ]; then
+  die "\$HOME is /"
+fi
+
+if [ "$user_mode" -eq 1 ]; then
+  if [ -n "$workspace" ]; then
+    die "--user does not take a workspace_root"
+  fi
+  link_a="$home_real/.agents"
+  link_b="$home_real/.agents/skills"
+  dest_parent="$home_real/.agents/skills"
+  dest="$dest_parent/$SKILL_NAME"
+else
+  if [ -z "$workspace" ]; then
+    usage
+  fi
+  if [ ! -d "$workspace" ]; then
+    die "workspace does not exist: $workspace"
+  fi
+  workspace_real=$(resolve_dir "$workspace") || die "cannot resolve $workspace"
+  if [ "$workspace_real" = "/" ]; then
+    die "workspace_root is /"
+  fi
+  if [ "$workspace_real" = "$home_real" ]; then
+    die "workspace_root is \$HOME ($home_real)"
+  fi
+  link_a="$workspace_real/.cursor"
+  link_b="$workspace_real/.cursor/skills"
+  dest_parent="$workspace_real/.cursor/skills"
+  dest="$dest_parent/$SKILL_NAME"
+  case "$dest" in
+    "$workspace_real"/.cursor/skills/"$SKILL_NAME") ;;
+    *) die "target escaped workspace: $dest" ;;
+  esac
+fi
 
 case "$dest" in
-  "$workspace_real"/.cursor/skills/"$SKILL_NAME") ;;
-  *) die "target escaped workspace: $dest" ;;
+  "$dest_parent"/"$SKILL_NAME") ;;
+  *) die "target escaped parent: $dest" ;;
 esac
 
-if [ -L "$workspace_real/.cursor" ] || [ -L "$workspace_real/.cursor/skills" ] || [ -L "$dest" ]; then
-  die "refusing to follow a symlink at .cursor, .cursor/skills, or $dest"
+if [ -L "$link_a" ] || [ -L "$link_b" ] || [ -L "$dest" ]; then
+  die "refusing to follow a symlink at $link_a, $link_b, or $dest"
 fi
 
 if [ "$uninstall" -eq 1 ]; then
@@ -104,17 +127,17 @@ if [ "$src_real" = "$dest" ]; then
   die "source and destination are the same directory: $dest"
 fi
 
-mkdir -p "$workspace_real/.cursor/skills"
+mkdir -p "$dest_parent"
 
 if [ -e "$dest" ] && [ ! -d "$dest" ]; then
   die "$dest exists and is not a directory"
 fi
 
-# Replace this skill folder only. Sibling skills under .cursor/skills stay.
+# Replace this skill folder only. Sibling skills stay.
 if [ -d "$dest" ]; then
   rm -rf "$dest"
 fi
-cp -R "$src" "$workspace_real/.cursor/skills/"
+cp -R "$src" "$dest_parent/"
 
 echo "installed $SKILL_NAME"
 echo "  from: $src"

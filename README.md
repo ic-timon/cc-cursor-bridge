@@ -211,9 +211,13 @@ cp cursor/skills/claude-code-bridge/SKILL.md ~/.cursor/skills/claude-code-bridge
 ```bash
 scripts/install_cursor_skill.sh /path/to/workspace
 scripts/install_cursor_skill.sh --uninstall /path/to/workspace
+scripts/install_cursor_skill.sh --user
+scripts/install_cursor_skill.sh --user --uninstall
 ```
 
-脚本把 `cursor/skills/claude-code-bridge/` 整份（含以后加的 `scripts/`、`references/`）复制到 `<workspace>/.cursor/skills/claude-code-bridge/`，并且只替换这一个目录。工作区是 `/`、`$HOME`，或不存在时会拒绝。`--uninstall` 只删那个目录。本机 worker 的工作区根是 `/Users/timon/Sync/Test`，已用这个脚本装过；该目录不在本仓库的 git 里。
+工作区模式把 `cursor/skills/claude-code-bridge/` 整份（含以后加的 `scripts/`、`references/`）复制到 `<workspace>/.cursor/skills/claude-code-bridge/`，并且只替换这一个目录。工作区是 `/`、`$HOME`，或不存在时会拒绝。`--uninstall` 只删那个目录。本机 worker 的工作区根是 `/Users/timon/Sync/Test`，已用这个脚本装过；该目录不在本仓库的 git 里。一次新会话没有从那里加载 skill。
+
+`--user` 装到 `$HOME/.agents/skills/claude-code-bridge/`（没有这个目录就创建）。同样只替换这一个文件夹，`--user --uninstall` 只删它。不写入 `~/.claude/skills/` 或 `~/.codex/skills/`。同一台机器上的新会话能读到 `~/.agents/skills/`（例如 babysit）、`~/.claude/skills/` 和 `~/.codex/skills/`，读不到 `/Users/timon/Sync/Test/.cursor/skills/`。本机已用 `--user` 装过。
 
 ### 怎么验证
 
