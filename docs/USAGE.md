@@ -100,7 +100,7 @@ python3 /path/to/cc-cursor-bridge/scripts/bridge.py push "$CC_TASK_ID" --since 0
 python3 /path/to/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
 ```
 
-`pending` 只列出还没有回复的等待项。`push` 列出还没消费的通知并前进游标；`--since <seq>` 从该序号之后再列一次。`watch` 每出现一条就打一行：`pending <路径>` 或 `push <路径>`。每行仍以路径开头，后面可能跟一段摘要：Stop/SubagentStop 显示 `— reply: <回答第一行>`，PostToolUse 显示 `— response: <输出第一行>`，PostToolUseFailure 显示 `— error: <错误第一行>`，助手文本打开时显示 `— assistant: <文本第一行>`。加 `--once` 只打当前这一批。
+`pending` 只列出还没有回复的等待项。`push` 列出还没消费的通知并前进游标；`--since <seq>` 从该序号之后再列一次。`pending` 和 `push` 每行第一列就是完整路径，没有前缀；有摘要时在同一行路径后接一个 TAB 和 `# ...`，没有摘要时与以前逐字节一致。`watch` 每出现一条就打一行：`pending <路径>` 或 `push <路径>`，摘要同样用 TAB 接在路径后。摘要格式：Stop/SubagentStop `# reply: <回答第一行>`，PostToolUse `# response: <输出第一行>`，PostToolUseFailure `# error: <错误第一行>`，助手文本打开时 `# assistant: <文本第一行>`。加 `--once` 只打当前这一批。
 
 命令、文件内容、Stop/SubagentStop 的回答、PostToolUse 的 `tool_response` 或 PostToolUseFailure 的 `error` 超过上限时，短文件里该字段是一个带 `text`、`truncated: true`、`original_length` 和 `sha256` 的对象。完整且已脱敏的正文在同目录的 `<seq>-<事件>.full.json`。先读这份完整文件，再决定 allow 或验收。主通知里的 `summary` 仍按 `log.max_field_chars`（默认 240）保持简短。
 
@@ -134,11 +134,11 @@ Stop 和 SubagentStop 的 pending/push 通知顶层会多这些字段：
 
 PostToolUse 的通知带 `tool_response`，PostToolUseFailure 带 `error` 和 `is_interrupt`。它们在主通知里按 `log.max_field_chars`（默认 240）截断，完整内容同样进 `.full.json`。这些字段和日志里的其他文本一样会脱敏。
 
-`bridge.py pending/push/watch` 的每一行仍以路径开头，后面追加第一行预览：
+`bridge.py pending/push` 的每一行第一列是路径，后面用 TAB 追加第一行预览；`watch` 在路径前加 `pending`/`push`：
 
 ```text
-push ~/.cc-bridge/tasks/<task>/push/12-Stop.json — reply: 已完成 fizzbuzz，测试通过
-push ~/.cc-bridge/tasks/<task>/push/13-PostToolUse.json — response: {"stdout": "hi\n", "stderr": ""}
+~/.cc-bridge/tasks/<task>/push/12-Stop.json	# reply: 已完成 fizzbuzz，测试通过
+~/.cc-bridge/tasks/<task>/push/13-PostToolUse.json	# response: {"stdout": "hi\n", "stderr": ""}
 ```
 
 ### 助手文本（默认关）

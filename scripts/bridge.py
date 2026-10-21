@@ -1669,10 +1669,10 @@ def notice_annotation(path: Path) -> str:
     return ""
 
 
-def notice_line(kind: str, path: Path) -> str:
+def notice_line(path: Path, kind: str = "") -> str:
     annotation = notice_annotation(path)
-    line = f"{kind} {path}"
-    return line + (f" — {annotation}" if annotation else "")
+    line = f"{kind} {path}" if kind else str(path)
+    return line + (f"\t# {annotation}" if annotation else "")
 
 
 def read_push_cursor(task_dir: Path) -> int:
@@ -1702,7 +1702,7 @@ def cli(argv: List[str]) -> HookResult:
         for path in short_notices(root / "pending"):
             seq = path.name.split("-", 1)[0]
             if not (root / "replies" / f"{seq}.json").is_file():
-                lines.append(notice_line("pending", path))
+                lines.append(notice_line(path))
         return HookResult(stdout=("\n".join(lines) + ("\n" if lines else "")))
     if argv[0] == "push":
         return push_command(argv[1:])
@@ -1752,7 +1752,7 @@ def push_command(argv: List[str]) -> HookResult:
     chosen = [path for path in short_notices(root / "push") if notice_seq(path) > floor]
     if chosen:
         write_push_cursor(root, max(cursor, max(notice_seq(path) for path in chosen)))
-    text = "\n".join(notice_line("push", path) for path in chosen)
+    text = "\n".join(notice_line(path) for path in chosen)
     return HookResult(stdout=text + ("\n" if text else ""))
 
 
@@ -1794,7 +1794,7 @@ def watch_command(argv: List[str]) -> HookResult:
             for path in short_notices(folder):
                 if kind == "pending" and (replies / f"{notice_seq(path)}.json").is_file():
                     continue
-                key = notice_line(kind, path)
+                key = notice_line(path, kind)
                 if key in seen:
                     continue
                 seen.add(key)

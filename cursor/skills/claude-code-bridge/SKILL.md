@@ -120,7 +120,7 @@ python3 /path/to/cc-cursor-bridge/scripts/bridge.py push "$CC_TASK_ID"
 python3 /path/to/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
 ```
 
-`pending` 只列出还没有 `replies/<seq>.json` 的等待项。`push` 列出尚未消费的推送并前进游标；`--since <seq>` 从该序号之后再列一次。`watch` 把新出现的 pending 和 push 各打一行（`pending <路径>` 或 `push <路径>`），适合盯着看。每行仍以路径开头，后面可能跟一段预览：`— reply: <回答第一行>`（Stop/SubagentStop）、`— response: <输出第一行>`（PostToolUse）、`— error: <错误第一行>`（PostToolUseFailure）、`— assistant: <文本第一行>`（助手文本打开时）。加 `--once` 只打当前这一批。
+`pending` 只列出还没有 `replies/<seq>.json` 的等待项。`push` 列出尚未消费的推送并前进游标；`--since <seq>` 从该序号之后再列一次。`pending` 和 `push` 每行第一列是完整路径，没有 kind 前缀；有预览时在路径后接一个 TAB 和 `# reply: ...` / `# assistant: ...`，没有预览时只有路径，和以前一致。`watch` 把新出现的 pending 和 push 各打一行（`pending <路径>` 或 `push <路径>`），预览同样用 TAB 接在路径后，适合盯着看。预览格式：`# reply: <回答第一行>`（Stop/SubagentStop）、`# response: ...`（PostToolUse）、`# error: ...`（PostToolUseFailure）、`# assistant: ...`（助手文本打开时）。加 `--once` 只打当前这一批。
 
 回复是一个 JSON 对象：
 

@@ -840,6 +840,85 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(watched.returncode, 0, watched.stderr)
         self.assertIn("assistant: 正在创建 fizzbuzz.py", watched.stdout)
 
+    def test_pending_output_is_path_only_without_annotation(self):
+        self.environ["CC_BRIDGE_WAIT_ALL"] = "1"
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.2"
+        result, _ = self.run_pre("Bash", {"command": "echo hi"})
+        self.assertIn('"deny"', result.stdout)
+        pending = self.bridge_dir / "tasks" / "task1" / "pending"
+        path = next(pending.glob("*-PreToolUse.json"))
+        previous = os.environ.get("CC_BRIDGE_DIR")
+        os.environ["CC_BRIDGE_DIR"] = str(self.bridge_dir)
+        try:
+            listed = bridge.cli(["pending", "task1"])
+        finally:
+            if previous is None:
+                os.environ.pop("CC_BRIDGE_DIR", None)
+            else:
+                os.environ["CC_BRIDGE_DIR"] = previous
+        self.assertEqual(listed.stdout, f"{path}\n")
+
+    def test_pending_push_and_watch_annotations_follow_tab(self):
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.2"
+        bridge.handle_event(
+            {
+                "hook_event_name": "Stop",
+                "session_id": "sess",
+                "cwd": str(self.cwd),
+                "last_assistant_message": "等待验收\n细节",
+            },
+            self.environ,
+        )
+        self.environ["CC_BRIDGE_ASSISTANT_TEXT"] = "1"
+        bridge.handle_event(
+            {
+                "hook_event_name": "MessageDisplay",
+                "session_id": "sess",
+                "cwd": str(self.cwd),
+                "delta": "正在创建 fizzbuzz.py\n后续",
+                "message_id": "msg-1",
+            },
+            self.environ,
+        )
+        previous = os.environ.get("CC_BRIDGE_DIR")
+        os.environ["CC_BRIDGE_DIR"] = str(self.bridge_dir)
+        try:
+            pending_line = bridge.cli(["pending", "task1"]).stdout.strip()
+            self.assertIn("\t# reply: 等待验收", pending_line)
+            self.assertFalse(pending_line.startswith("pending "))
+            pending_path = Path(pending_line.split("\t", 1)[0])
+            self.assertTrue(pending_path.is_file())
+
+            push_line = bridge.cli(["push", "task1"]).stdout.strip()
+            self.assertIn("\t# assistant: 正在创建 fizzbuzz.py", push_line)
+            self.assertFalse(push_line.startswith("push "))
+            push_path = Path(push_line.split("\t", 1)[0])
+            self.assertTrue(push_path.is_file())
+
+            script = str(ROOT / "scripts" / "bridge.py")
+            env = os.environ.copy()
+            env["CC_BRIDGE_DIR"] = str(self.bridge_dir)
+            watched = subprocess.run(
+                [sys.executable, script, "watch", "task1", "--once"],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(watched.returncode, 0, watched.stderr)
+            self.assertIn(
+                f"pending {pending_path}\t# reply: 等待验收", watched.stdout
+            )
+            self.assertIn(
+                f"push {push_path}\t# assistant: 正在创建 fizzbuzz.py",
+                watched.stdout,
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("CC_BRIDGE_DIR", None)
+            else:
+                os.environ["CC_BRIDGE_DIR"] = previous
+
     def test_wait_all_reply_and_timeout(self):
         self.environ["CC_BRIDGE_WAIT_ALL"] = "1"
         self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "2"
