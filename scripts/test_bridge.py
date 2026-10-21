@@ -95,6 +95,20 @@ class BridgeTest(unittest.TestCase):
         for name in names:
             self.environ[f"CC_BRIDGE_EVENT_MODE_{name}"] = "log"
 
+    def push_notice(self, event_name: str) -> dict:
+        push = self.bridge_dir / "tasks" / "task1" / "push"
+        path = next(
+            item
+            for item in sorted(push.glob(f"*-{event_name}.json"))
+            if not item.name.endswith(".full.json")
+        )
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def full_notice(self, short: dict, kind: str = "push") -> dict:
+        relative = short["full_file"].split("/", 1)[1]
+        path = self.bridge_dir / "tasks" / "task1" / kind / relative
+        return json.loads(path.read_text(encoding="utf-8"))
+
     def test_rm_rf_denied_and_plain_rm_allowed(self):
         self.log_only("PreToolUse")
         denied, lines = self.run_pre("Bash", {"command": "rm -rf scratch"})
@@ -558,6 +572,167 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(full["tool_input"]["content"], content)
         self.assertEqual(full["tool_input"]["edits"], edits)
         self.assertFalse(full["truncated"])
+
+    def test_stop_notice_carries_last_message_and_full_file(self):
+        self.environ["CC_BRIDGE_EVENT_MODE_Stop"] = "push"
+        self.environ["CC_BRIDGE_CURSOR_API_KEY"] = "super-secret-key"
+        cfg = bridge.default_config()
+        cfg["pending"]["content_chars"] = 30
+        message = "第一行回答\n" + ("细节" * 40) + " super-secret-key"
+        redacted = message.replace("super-secret-key", "[redacted]")
+        bridge.handle_event(
+            {
+                "hook_event_name": "Stop",
+                "session_id": "sess",
+                "cwd": str(self.cwd),
+                "last_assistant_message": message,
+                "transcript_path": "transcript.jsonl",
+            },
+            self.environ,
+            cfg=cfg,
+        )
+        short = self.push_notice("Stop")
+        self.assertTrue(short["last_assistant_message"]["truncated"])
+        self.assertEqual(short["last_assistant_message"]["original_length"], len(redacted))
+        self.assertEqual(short["transcript_path"], "transcript.jsonl")
+        self.assertTrue(short["truncated"])
+        self.assertNotIn("super-secret-key", json.dumps(short, ensure_ascii=False))
+        full = self.full_notice(short)
+        self.assertEqual(full["last_assistant_message"], redacted)
+        self.assertEqual(full["transcript_path"], "transcript.jsonl")
+        self.assertFalse(full["truncated"])
+
+    def test_subagent_stop_notice_carries_agent_context(self):
+        self.environ["CC_BRIDGE_CURSOR_API_KEY"] = "super-secret-key"
+        bridge.handle_event(
+            {
+                "hook_event_name": "SubagentStop",
+                "session_id": "sess",
+                "cwd": str(self.cwd),
+                "last_assistant_message": "子代理完成 super-secret-key",
+                "transcript_path": "parent.jsonl",
+                "agent_transcript_path": "agent.jsonl",
+                "agent_type": "Explore",
+                "agent_id": "agent-1",
+            },
+            self.environ,
+        )
+        short = self.push_notice("SubagentStop")
+        self.assertEqual(short["last_assistant_message"], "子代理完成 [redacted]")
+        self.assertEqual(short["transcript_path"], "parent.jsonl")
+        self.assertEqual(short["agent_transcript_path"], "agent.jsonl")
+        self.assertEqual(short["agent_type"], "Explore")
+        self.assertEqual(short["agent_id"], "agent-1")
+        self.assertNotIn("super-secret-key", json.dumps(short, ensure_ascii=False))
+
+    def test_tool_response_and_error_write_full_files(self):
+        cfg = bridge.default_config()
+        cfg["log"]["max_field_chars"] = 12
+        response = {"stdout": "X" * 50, "stderr": "", "interrupted": False}
+        bridge.handle_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "sess",
+                "cwd": str(self.cwd),
+                "tool_name": "Bash",
+                "tool_input": {"command": "echo hi"},
+                "tool_response": response,
+            },
+            self.environ,
+            cfg=cfg,
+        )
+        short = self.push_notice("PostToolUse")
+        self.assertTrue(short["tool_response"]["truncated"])
+        self.assertEqual(
+            short["tool_response"]["original_length"],
+            len(json.dumps(response, ensure_ascii=False)),
+        )
+        full = self.full_notice(short)
+        self.assertEqual(full["tool_response"], json.dumps(response, ensure_ascii=False))
+        self.assertFalse(full["truncated"])
+
+        bridge.handle_event(
+            {
+                "hook_event_name": "PostToolUseFailure",
+                "session_id": "sess",
+                "cwd": str(self.cwd),
+                "tool_name": "Bash",
+                "tool_input": {"command": "false"},
+                "error": "E" * 60,
+                "is_interrupt": True,
+            },
+            self.environ,
+            cfg=cfg,
+        )
+        short = self.push_notice("PostToolUseFailure")
+        self.assertTrue(short["error"]["truncated"])
+        self.assertTrue(short["is_interrupt"])
+        full = self.full_notice(short)
+        self.assertEqual(full["error"], "E" * 60)
+        self.assertFalse(full["truncated"])
+
+    def test_cli_shows_reply_and_tool_output_preview(self):
+        self.environ["CC_BRIDGE_EVENT_MODE_Stop"] = "push"
+        bridge.handle_event(
+            {
+                "hook_event_name": "Stop",
+                "session_id": "sess",
+                "cwd": str(self.cwd),
+                "last_assistant_message": "已完成 fizzbuzz\n细节",
+            },
+            self.environ,
+        )
+        bridge.handle_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "sess",
+                "cwd": str(self.cwd),
+                "tool_name": "Bash",
+                "tool_input": {"command": "echo hi"},
+                "tool_response": {"stdout": "hi\nmore", "stderr": ""},
+            },
+            self.environ,
+        )
+        previous = os.environ.get("CC_BRIDGE_DIR")
+        os.environ["CC_BRIDGE_DIR"] = str(self.bridge_dir)
+        try:
+            pushed = bridge.cli(["push", "task1"])
+            self.assertIn("reply: 已完成 fizzbuzz", pushed.stdout)
+            self.assertIn("response: ", pushed.stdout)
+            self.assertIn("stdout", pushed.stdout)
+
+            self.environ["CC_BRIDGE_EVENT_MODE_Stop"] = "wait"
+            self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.2"
+            bridge.handle_event(
+                {
+                    "hook_event_name": "Stop",
+                    "session_id": "sess",
+                    "cwd": str(self.cwd),
+                    "last_assistant_message": "等待验收\n细节",
+                },
+                self.environ,
+            )
+            pending = bridge.cli(["pending", "task1"])
+            self.assertIn("reply: 等待验收", pending.stdout)
+
+            script = str(ROOT / "scripts" / "bridge.py")
+            env = os.environ.copy()
+            env["CC_BRIDGE_DIR"] = str(self.bridge_dir)
+            watched = subprocess.run(
+                [sys.executable, script, "watch", "task1", "--once"],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(watched.returncode, 0, watched.stderr)
+            self.assertIn("reply: 已完成 fizzbuzz", watched.stdout)
+            self.assertIn("reply: 等待验收", watched.stdout)
+        finally:
+            if previous is None:
+                os.environ.pop("CC_BRIDGE_DIR", None)
+            else:
+                os.environ["CC_BRIDGE_DIR"] = previous
 
     def test_wait_all_reply_and_timeout(self):
         self.environ["CC_BRIDGE_WAIT_ALL"] = "1"

@@ -549,6 +549,16 @@ def summarize(event: dict, limit: int, secrets: List[str]) -> dict:
             summary[key] = truncate(event[key], limit, secrets)
     if isinstance(event.get("file_path"), str) and "file_path" not in summary:
         summary["file_path"] = truncate(event["file_path"], limit, secrets)
+    if event.get("hook_event_name") in ("Stop", "SubagentStop"):
+        for key in (
+            "last_assistant_message",
+            "transcript_path",
+            "agent_transcript_path",
+            "agent_type",
+            "agent_id",
+        ):
+            if key in event and event[key] not in (None, "") and key not in summary:
+                summary[key] = truncate(event[key], limit, secrets)
     if isinstance(event.get("tool_use_id"), str):
         summary["tool_use_id"] = event["tool_use_id"][:120]
     return summary
@@ -1147,6 +1157,53 @@ def pending_tool_view(tool_input: dict, cfg: dict, secrets: List[str], full: boo
     return view, truncated
 
 
+def bounded_pair(value: Any, limit: int, secrets: List[str]) -> Tuple[Any, Any, bool]:
+    short = bounded_field(value, limit, secrets, full=False)
+    full = bounded_field(value, limit, secrets, full=True)
+    return short, full, isinstance(short, dict) and bool(short.get("truncated"))
+
+
+def notice_extra_fields(
+    event_name: str, event: dict, cfg: dict, secrets: List[str]
+) -> Tuple[dict, dict, bool]:
+    """Reply and tool-result fields that the compact summary would lose."""
+    _, content_limit = pending_limits(cfg)
+    log_limit = int((cfg.get("log") or {}).get("max_field_chars") or 240)
+    short: Dict[str, Any] = {}
+    full: Dict[str, Any] = {}
+    truncated = False
+
+    def add(key: str, value: Any, limit: int) -> None:
+        nonlocal truncated
+        shown, whole, was_truncated = bounded_pair(value, limit, secrets)
+        short[key] = shown
+        full[key] = whole
+        truncated = truncated or was_truncated
+
+    if event_name in ("Stop", "SubagentStop"):
+        message = event.get("last_assistant_message")
+        if isinstance(message, str) and message:
+            add("last_assistant_message", message, content_limit)
+        transcript = event.get("transcript_path")
+        if isinstance(transcript, str) and transcript:
+            add("transcript_path", transcript, content_limit)
+        if event_name == "SubagentStop":
+            for key in ("agent_transcript_path", "agent_type", "agent_id"):
+                value = event.get(key)
+                if isinstance(value, str) and value:
+                    add(key, value, content_limit)
+    if event_name in ("PostToolUse", "PostToolUseFailure"):
+        response = event.get("tool_response")
+        if response not in (None, ""):
+            add("tool_response", response, log_limit)
+        error = event.get("error")
+        if error not in (None, ""):
+            add("error", error, log_limit)
+        if "is_interrupt" in event:
+            short["is_interrupt"] = bool(event.get("is_interrupt"))
+    return short, full, truncated
+
+
 def notice_body(
     seq: int,
     event_name: str,
@@ -1158,8 +1215,11 @@ def notice_body(
     secrets: List[str],
     stdout: str,
 ) -> Tuple[dict, dict, bool]:
-    short_input, was_truncated = pending_tool_view(tool_input, cfg, secrets, full=False)
+    short_input, input_truncated = pending_tool_view(tool_input, cfg, secrets, full=False)
     full_input, _ = pending_tool_view(tool_input, cfg, secrets, full=True)
+    extra_short, extra_full, extra_truncated = notice_extra_fields(
+        event_name, event, cfg, secrets
+    )
     body = {
         "seq": seq,
         "event": event_name,
@@ -1172,27 +1232,40 @@ def notice_body(
         "reply_hint": reply_hint(event_name),
         "created_at": local_iso(),
     }
+    body.update(extra_short)
     if "stop_hook_active" in event:
         body["stop_hook_active"] = bool(event.get("stop_hook_active"))
+    was_truncated = input_truncated or extra_truncated
     if was_truncated:
         body["truncated"] = True
     if event_name == "WorktreeCreate" and stdout.strip():
         body["worktreePath"] = stdout.strip()
-    return body, full_input, was_truncated
+    full_body = dict(body)
+    full_body["tool_input"] = full_input
+    full_body.update(extra_full)
+    full_body["truncated"] = False
+    return body, full_body, was_truncated
 
 
-def write_notice(directory: Path, kind: str, seq: int, event_name: str, body: dict, full_input: dict, was_truncated: bool) -> None:
+def write_notice(
+    directory: Path,
+    kind: str,
+    seq: int,
+    event_name: str,
+    body: dict,
+    full_body: dict,
+    was_truncated: bool,
+) -> None:
     payload = dict(body)
     if was_truncated:
         payload["full_file"] = f"{kind}/{seq}-{event_name}.full.json"
     path = directory / kind / f"{seq}-{event_name}.json"
     write_atomic(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     if was_truncated:
-        full_body = dict(payload)
-        full_body["tool_input"] = full_input
-        full_body["truncated"] = False
+        full_payload = dict(full_body)
+        full_payload["full_file"] = payload["full_file"]
         full_path = directory / kind / f"{seq}-{event_name}.full.json"
-        write_atomic(full_path, json.dumps(full_body, ensure_ascii=False, indent=2) + "\n")
+        write_atomic(full_path, json.dumps(full_payload, ensure_ascii=False, indent=2) + "\n")
     if kind == "push":
         stream = directory / "push" / "stream.jsonl"
         stream.parent.mkdir(parents=True, exist_ok=True)
@@ -1384,13 +1457,13 @@ def handle_event(
     summary["channel"] = mode
     blocked_by_probe = probe_stdout is not None and event_name not in ("WorktreeCreate", "WorktreeRemove")
     if not rule_id and not blocked_by_probe and mode in ("wait", "push"):
-        body, full_input, was_truncated = notice_body(
+        body, full_body, was_truncated = notice_body(
             seq, event_name, event, tool_name, tool_input, summary, cfg, secrets, stdout
         )
         if mode == "wait":
             body["reply_file"] = f"replies/{seq}.json"
             pending_id = str(seq)
-            write_notice(directory, "pending", seq, event_name, body, full_input, was_truncated)
+            write_notice(directory, "pending", seq, event_name, body, full_body, was_truncated)
             reply, via = poll_reply_file(
                 directory / "replies" / f"{seq}.json",
                 float(wait_all.get("timeout_seconds", 120)),
@@ -1425,7 +1498,7 @@ def handle_event(
                 reason = str(reply.get("reason") or reply.get("message") or "")
         else:
             push_id = str(seq)
-            write_notice(directory, "push", seq, event_name, body, full_input, was_truncated)
+            write_notice(directory, "push", seq, event_name, body, full_body, was_truncated)
             summary["delivery"] = "push"
     if rule_id:
         summary["delivery"] = "rule"
@@ -1517,6 +1590,47 @@ def notice_seq(path: Path) -> int:
     return int(head) if head.isdigit() else 0
 
 
+def field_text(value: Any) -> str:
+    if isinstance(value, dict):
+        text = value.get("text")
+        return text if isinstance(text, str) else ""
+    return value if isinstance(value, str) else ""
+
+
+def first_line(text: str, limit: int = 160) -> str:
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line:
+            return line[:limit] + ("…" if len(line) > limit else "")
+    return ""
+
+
+def notice_annotation(path: Path) -> str:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    event_name = str(data.get("event") or "")
+    if event_name in ("Stop", "SubagentStop"):
+        line = first_line(field_text(data.get("last_assistant_message")))
+        return f"reply: {line}" if line else ""
+    if event_name == "PostToolUse":
+        line = first_line(field_text(data.get("tool_response")))
+        return f"response: {line}" if line else ""
+    if event_name == "PostToolUseFailure":
+        line = first_line(field_text(data.get("error")))
+        return f"error: {line}" if line else ""
+    return ""
+
+
+def notice_line(kind: str, path: Path) -> str:
+    annotation = notice_annotation(path)
+    line = f"{kind} {path}"
+    return line + (f" — {annotation}" if annotation else "")
+
+
 def read_push_cursor(task_dir: Path) -> int:
     path = task_dir / "push" / "cursor"
     try:
@@ -1544,7 +1658,7 @@ def cli(argv: List[str]) -> HookResult:
         for path in short_notices(root / "pending"):
             seq = path.name.split("-", 1)[0]
             if not (root / "replies" / f"{seq}.json").is_file():
-                lines.append(str(path))
+                lines.append(notice_line("pending", path))
         return HookResult(stdout=("\n".join(lines) + ("\n" if lines else "")))
     if argv[0] == "push":
         return push_command(argv[1:])
@@ -1594,7 +1708,7 @@ def push_command(argv: List[str]) -> HookResult:
     chosen = [path for path in short_notices(root / "push") if notice_seq(path) > floor]
     if chosen:
         write_push_cursor(root, max(cursor, max(notice_seq(path) for path in chosen)))
-    text = "\n".join(str(path) for path in chosen)
+    text = "\n".join(notice_line("push", path) for path in chosen)
     return HookResult(stdout=text + ("\n" if text else ""))
 
 
@@ -1636,7 +1750,7 @@ def watch_command(argv: List[str]) -> HookResult:
             for path in short_notices(folder):
                 if kind == "pending" and (replies / f"{notice_seq(path)}.json").is_file():
                     continue
-                key = f"{kind} {path}"
+                key = notice_line(kind, path)
                 if key in seen:
                     continue
                 seen.add(key)
