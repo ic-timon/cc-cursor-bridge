@@ -29,5 +29,9 @@
     "enabled": false,
     "timeout_seconds": 120,
     "poll_interval_seconds": 0.25
+  },
+  "pending": {
+    "command_chars": 4000,
+    "content_chars": 2000
   }
 }

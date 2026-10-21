@@ -8,6 +8,7 @@ packages and no network calls.
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -127,6 +128,10 @@ def default_config() -> dict:
             "timeout_seconds": 120,
             "poll_interval_seconds": 0.25,
         },
+        "pending": {
+            "command_chars": 4000,
+            "content_chars": 2000,
+        },
     }
 
 
@@ -168,7 +173,7 @@ def load_config(root: Path, environ: dict) -> Tuple[dict, str]:
         return cfg, f"配置文件无法解析，已回退到内置配置: {exc}"
     if not isinstance(data, dict):
         return cfg, "配置文件不是对象，已回退到内置配置"
-    for key in ("notifier", "wait", "wait_all", "log"):
+    for key in ("notifier", "wait", "wait_all", "log", "pending"):
         if isinstance(data.get(key), dict):
             cfg[key].update(data[key])
     return cfg, ""
@@ -955,6 +960,59 @@ def decision_stdout(event_name: str, decision: str, reason: str) -> str:
     return ""
 
 
+def pending_limits(cfg: dict) -> Tuple[int, int]:
+    pending = cfg.get("pending") or {}
+    return int(pending.get("command_chars") or 4000), int(pending.get("content_chars") or 2000)
+
+
+def bounded_field(value: Any, limit: int, secrets: List[str], full: bool) -> Any:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    text = redact(text, secrets)
+    if full or len(text) <= limit:
+        return text
+    return {
+        "text": text[:limit] + "…[truncated]",
+        "truncated": True,
+        "original_length": len(text),
+        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    }
+
+
+def pending_tool_view(tool_input: dict, cfg: dict, secrets: List[str], full: bool = False) -> Tuple[dict, bool]:
+    command_limit, content_limit = pending_limits(cfg)
+    view: Dict[str, Any] = {}
+    truncated = False
+
+    def put_string(key: str, value: str) -> Any:
+        nonlocal truncated
+        limit = command_limit if key == "command" else content_limit
+        shown = bounded_field(value, limit, secrets, full)
+        if isinstance(shown, dict) and shown.get("truncated"):
+            truncated = True
+        return shown
+
+    for key, value in tool_input.items():
+        if key == "edits" and isinstance(value, list):
+            shown_edits = []
+            for item in value:
+                if isinstance(item, dict):
+                    shown_edits.append(
+                        {
+                            edit_key: put_string(edit_key, edit_value) if isinstance(edit_value, str) else edit_value
+                            for edit_key, edit_value in item.items()
+                        }
+                    )
+                else:
+                    shown_edits.append(item)
+            view["edits"] = shown_edits
+            continue
+        if isinstance(value, str):
+            view[key] = put_string(key, value)
+        else:
+            view[key] = value
+    return view, truncated
+
+
 def pending_input(tool_input: dict, limit: int, secrets: List[str]) -> dict:
     view: Dict[str, Any] = {}
     for key, value in tool_input.items():
@@ -1090,13 +1148,11 @@ def handle_event(
     if event_name == "PreToolUse":
         matched = first_deny(rules, ctx)
         if matched:
+            # A matching safety rule always denies. wait_all and probe replies cannot override it.
             rule_id = str(matched.get("id") or "")
-            if not wait_all.get("enabled"):
-                decision = "deny"
-                reason = str(matched.get("reason") or rule_id or "denied")
-                stdout = decision_stdout(event_name, decision, reason)
-            else:
-                summary["rule_would_deny"] = rule_id
+            decision = "deny"
+            reason = str(matched.get("reason") or rule_id or "denied")
+            stdout = decision_stdout(event_name, decision, reason)
     if ctx["rule_errors"]:
         summary["rule_errors"] = truncate("; ".join(ctx["rule_errors"]), limit, secrets)
 
@@ -1105,7 +1161,9 @@ def handle_event(
         probe_stdout = take_probe_stdout(environ, event)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         summary["probe_error"] = truncate(str(exc), limit, secrets)
-    if probe_stdout is not None and event_name not in ("WorktreeCreate", "WorktreeRemove"):
+    if rule_id and probe_stdout is not None:
+        summary["probe"] = "ignored_for_rule_deny"
+    elif probe_stdout is not None and event_name not in ("WorktreeCreate", "WorktreeRemove"):
         stdout = probe_stdout
         decision = "probe"
         reason = "CC_BRIDGE_PROBE"
@@ -1114,23 +1172,27 @@ def handle_event(
         summary["probe"] = "ignored_for_worktree_protocol"
 
     directory = task_dir_for(event, environ)
-    if probe_stdout is None and wait_all.get("enabled"):
+    if probe_stdout is None and not rule_id and wait_all.get("enabled"):
         seq = reserve_seq(directory)
         pending_id = str(seq)
+        short_input, was_truncated = pending_tool_view(tool_input, cfg, secrets, full=False)
+        full_input, _ = pending_tool_view(tool_input, cfg, secrets, full=True)
         pending_body = {
             "seq": seq,
             "event": event_name,
             "session_id": event.get("session_id") or "",
             "cwd": event.get("cwd") or "",
             "tool_name": tool_name,
-            "tool_input": pending_input(tool_input, max(limit, 400), secrets),
+            "tool_input": short_input,
             "summary": summary,
             "input_keys": sorted(str(key) for key in event.keys()),
-            "rule_would_deny": rule_id or None,
             "reply_file": f"replies/{seq}.json",
             "reply_hint": reply_hint(event_name),
             "created_at": local_iso(),
         }
+        if was_truncated:
+            pending_body["truncated"] = True
+            pending_body["full_file"] = f"pending/{seq}-{event_name}.full.json"
         if event_name == "WorktreeCreate" and stdout.strip():
             pending_body["worktreePath"] = stdout.strip()
         pending_path = directory / "pending" / f"{seq}-{event_name}.json"
@@ -1138,6 +1200,14 @@ def handle_event(
         temporary = pending_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(pending_body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         temporary.replace(pending_path)
+        if was_truncated:
+            full_body = dict(pending_body)
+            full_body["tool_input"] = full_input
+            full_body["truncated"] = False
+            full_path = directory / "pending" / f"{seq}-{event_name}.full.json"
+            full_tmp = full_path.with_suffix(".tmp")
+            full_tmp.write_text(json.dumps(full_body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            full_tmp.replace(full_path)
         reply, via = poll_reply_file(
             directory / "replies" / f"{seq}.json",
             float(wait_all.get("timeout_seconds", 120)),
@@ -1239,6 +1309,8 @@ def cli(argv: List[str]) -> HookResult:
             return HookResult(stdout="")
         lines = []
         for path in sorted(pending.glob("*.json")):
+            if path.name.endswith(".full.json"):
+                continue
             seq = path.name.split("-", 1)[0]
             if not (replies / f"{seq}.json").is_file():
                 lines.append(str(path))
@@ -1273,3 +1345,12 @@ def main() -> HookResult:
     except json.JSONDecodeError as exc:
         return HookResult(stderr=f"cc-cursor-bridge: 无法解析 stdin JSON: {exc}\n")
     return handle_event(event)
+
+
+if __name__ == "__main__":
+    result = main()
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+    if result.stdout:
+        sys.stdout.write(result.stdout)
+    raise SystemExit(result.code)

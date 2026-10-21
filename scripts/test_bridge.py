@@ -453,6 +453,95 @@ class BridgeTest(unittest.TestCase):
         result, _ = self.run_pre("Bash", {"command": "echo hi"})
         self.assertEqual(result.stdout, "")
 
+    def test_bridge_cli_subprocess(self):
+        script = str(ROOT / "scripts" / "bridge.py")
+        env = os.environ.copy()
+        env["CC_BRIDGE_DIR"] = str(self.bridge_dir)
+        missing = subprocess.run([sys.executable, script, "pending"], capture_output=True, text=True, env=env)
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("usage", missing.stderr)
+        bad = subprocess.run(
+            [sys.executable, script, "reply", "task1", "1", "not-json"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn("JSON", bad.stderr)
+        ok = subprocess.run(
+            [sys.executable, script, "reply", "task1", "7", '{"ack": true}'],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertTrue((self.bridge_dir / "tasks" / "task1" / "replies" / "7.json").is_file())
+        listed = subprocess.run(
+            [sys.executable, script, "pending", "task1"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+
+    def test_wait_all_rule_deny_has_no_pending(self):
+        self.environ["CC_BRIDGE_WAIT_ALL"] = "1"
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "2"
+        probe = self.root / "allow-bash.json"
+        probe.write_text(
+            json.dumps(
+                {
+                    "responses": [
+                        {
+                            "event": "PreToolUse",
+                            "match": {"tool_name": "Bash"},
+                            "output": {
+                                "permissionDecision": "allow",
+                                "permissionDecisionReason": "try override",
+                            },
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.environ["CC_BRIDGE_PROBE"] = str(probe)
+        result, lines = self.run_pre("Bash", {"command": "rm -rf scratch"})
+        self.assertIn('"deny"', result.stdout)
+        self.assertEqual(lines[-1]["rule_id"], "bash-rm-rf")
+        self.assertEqual(lines[-1]["summary"].get("probe"), "ignored_for_rule_deny")
+        pending = self.bridge_dir / "tasks" / "task1" / "pending"
+        self.assertFalse(pending.exists())
+
+    def test_pending_truncation_writes_full_payload(self):
+        cfg = bridge.default_config()
+        cfg["wait_all"]["enabled"] = True
+        cfg["pending"] = {"command_chars": 12, "content_chars": 8}
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.3"
+        command = "echo " + ("Z" * 40)
+        content = "Y" * 30
+        edits = [{"old_string": "A" * 20, "new_string": "b"}]
+        bridge.handle_event(
+            self.pre("Bash", {"command": command, "content": content, "edits": edits}),
+            self.environ,
+            cfg=cfg,
+        )
+        pending = self.bridge_dir / "tasks" / "task1" / "pending"
+        short = json.loads(next(p for p in pending.glob("*-PreToolUse.json") if not p.name.endswith(".full.json")).read_text(encoding="utf-8"))
+        field = short["tool_input"]["command"]
+        self.assertTrue(field["truncated"])
+        self.assertEqual(field["original_length"], len(command))
+        self.assertEqual(len(field["sha256"]), 64)
+        self.assertTrue(short["tool_input"]["content"]["truncated"])
+        self.assertEqual(short["tool_input"]["content"]["original_length"], len(content))
+        self.assertTrue(short["tool_input"]["edits"][0]["old_string"]["truncated"])
+        self.assertTrue(short["truncated"])
+        full = json.loads(next(pending.glob("*.full.json")).read_text(encoding="utf-8"))
+        self.assertEqual(full["tool_input"]["command"], command)
+        self.assertEqual(full["tool_input"]["content"], content)
+        self.assertEqual(full["tool_input"]["edits"], edits)
+        self.assertFalse(full["truncated"])
+
     def test_wait_all_reply_and_timeout(self):
         self.environ["CC_BRIDGE_WAIT_ALL"] = "1"
         self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "2"

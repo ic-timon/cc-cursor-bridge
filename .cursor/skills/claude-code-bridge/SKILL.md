@@ -74,7 +74,7 @@ tail -n +1 -f "$CC_BRIDGE_DIR/tasks/$CC_TASK_ID/events.jsonl"
 
 ## 危险操作
 
-默认规则（`config/rules.json`，可关）会在 PreToolUse 直接 deny，不等待回复：
+默认规则（`config/rules.json`，可关）会在 PreToolUse 直接 deny，不写 pending，也不等回复。`wait_all` 打开时也一样：命中规则就立刻拒绝，agent 的 reply 不能改写这次拒绝。
 
 - `rm -rf` / `rm -fr` / `rm -r -f`，以及 PowerShell `Remove-Item -Recurse -Force`
 - `git push --force`、`-f`、`--force-with-lease`
@@ -121,7 +121,9 @@ python3 /path/to/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '<
 - WorktreeCreate：`{"worktreePath":"/absolute/path"}`，或 `{"ack":true}` 沿用 hook 已经建好的 git worktree
 - 没有决定权的事件：`{"ack":true}`
 
-超时：PreToolUse 和 PermissionRequest 默认 deny；其他事件当没回复，不改 Claude Code 的原行为。
+超时按事件分：PreToolUse 和 PermissionRequest 默认 deny；Stop、SubagentStop、PreCompact 这类可阻断事件，以及没有决定权的事件，超时后不改原行为。SessionEnd 的 hook timeout 只有 55 秒，不要把 `CC_BRIDGE_WAIT_ALL_TIMEOUT` 设得比对应事件的 timeout 更大。
+
+命令和文件内容超过上限时（默认命令 4000 字、文件内容 2000 字），短 pending 里该字段带 `truncated: true`、`original_length` 和 `sha256`，完整且已脱敏的正文在同目录的 `pending/<seq>-<事件>.full.json`。命令被截断时，先读这份 `.full.json` 再决定 allow。
 
 旧的窄等待仍然可用：`CC_BRIDGE_WAIT=1` 只在 PermissionRequest 上等，`CC_BRIDGE_WAIT_PRE_TOOL=1` 才加上 PreToolUse。文件名是 `pending/<id>.json`，不是 seq。
 
