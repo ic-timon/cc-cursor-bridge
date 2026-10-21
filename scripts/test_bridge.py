@@ -327,8 +327,7 @@ class BridgeTest(unittest.TestCase):
 
     def test_skill_copies_match(self):
         canonical = (ROOT / "cursor" / "skills" / "claude-code-bridge" / "SKILL.md").read_text(encoding="utf-8")
-        project = (ROOT / ".cursor" / "skills" / "claude-code-bridge" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertEqual(canonical, project)
+        self.assertFalse((ROOT / ".cursor").exists())
         self.assertTrue(canonical.startswith("---\nname: claude-code-bridge\n"))
         self.assertNotIn("dangerously-skip-permissions", canonical.split("不要用", 1)[0])
 

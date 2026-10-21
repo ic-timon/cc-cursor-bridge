@@ -1,5 +1,7 @@
 # cc-cursor-bridge
 
+使用说明见 [docs/USAGE.md](docs/USAGE.md)。
+
 Claude Code 插件加 Cursor skill。Cursor agent 在这台 Mac 上调用本机 `claude -p` 写代码时，插件负责三件事：把每个 hook 事件按顺序记下来，拦住危险的 Bash 和文件操作，并按事件模式决定是等待回复、异步推送，还是只写日志。33 个事件都还注册着，默认分流写在 `config/bridge.json` 的 `events`。
 
 本机 Claude Code 是 **2.1.306**（`/Users/timon/.local/bin/claude`）。事件清单以官方 hooks 文档和这个版本二进制里的合法事件集合为准，两者一致。
@@ -17,9 +19,9 @@ scripts/bridge.py                   日志、规则、等待、notifier 调用�
 scripts/test_bridge.py              不联网的单元测试
 config/rules.json                   危险操作规则，可关、可加
 config/bridge.json                  notifier 与等待通道，默认都关
-cursor/skills/claude-code-bridge/   Cursor 插件里的 skill（规范位置）
+cursor/skills/claude-code-bridge/   Cursor skill 的唯一副本
 cursor/hooks.json                   空的 Cursor hooks，避免误读 CC 的 hooks
-.cursor/skills/claude-code-bridge/  与插件 skill 相同的副本；本机 worker 实测未加载
+docs/USAGE.md                       给使用者和 agent 的简短说明
 examples/sandbox/                   claude --plugin-dir 自测目录，产物不入库
 ```
 
@@ -35,9 +37,7 @@ examples/sandbox/                   claude --plugin-dir 自测目录，产物不
 
 所以 Claude Code 的 hook 放在 `claude/hooks/hooks.json`，由 `.claude-plugin/plugin.json` 的 `hooks` 指过去。Cursor 的 skill 放在 `cursor/skills/claude-code-bridge/`，由 `.cursor-plugin/plugin.json` 的 `skills` 指过去，同时把 `hooks` 指到空的 `cursor/hooks.json`。
 
-Cursor 还会从 `.claude/skills/` 加载 skill。这个仓库没有 `.claude/skills/`。Claude Code 2.1.306 里出现 `.cursor/skills` 的那段代码是迁移扫描（把 Cursor 配置导入成 Claude 配置），不是每次会话自动加载。项目级 `.cursor/skills/` 因此不会在普通 `claude -p` 里变成 Claude 的 skill。
-
-`.cursor/skills/claude-code-bridge/SKILL.md` 和插件里那份内容相同，改的时候两份一起改。这台 self-hosted worker 的实测没有加载项目级 `.cursor/skills/`。
+Cursor 还会从 `.claude/skills/` 加载 skill。这个仓库没有 `.claude/skills/`，也没有项目级 `.cursor/skills/`。Claude Code 2.1.306 里出现 `.cursor/skills` 的那段代码是迁移扫描（把 Cursor 配置导入成 Claude 配置），不是每次会话自动加载。Skill 只改 `cursor/skills/claude-code-bridge/SKILL.md`。
 
 ## Claude Code 插件
 
@@ -220,8 +220,8 @@ scripts/install_cursor_skill.sh --workspace /path/to/project --uninstall
 
 没有被加载的位置：
 
-- 仓库里的 `.cursor/skills/claude-code-bridge/`
-- 工作区根 `/Users/timon/Sync/Test/.cursor/skills/claude-code-bridge/`
+- 项目或工作区里的 `.cursor/skills/`（仓库里不再放这份副本）
+- 工作区根 `/Users/timon/Sync/Test/.cursor/skills/claude-code-bridge/`（当时的临时安装，已删）
 - `~/.agents/skills/claude-code-bridge/`（更早一次会话能看到同目录里的 babysit 等 skill；这次核实 cloud agent 并不从这里加载 skill）
 - `~/.cursor/plugins/local/cc-cursor-bridge/`
 
