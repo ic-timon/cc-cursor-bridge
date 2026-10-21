@@ -59,10 +59,13 @@ claude -p \
 - `ts`：本地时间
 - `event`：hook 名
 - `session_id`
-- `summary`：工具名、命令、路径、Edit 的 old/new、Bash 输出，长内容已截断
+- `summary`：工具名、命令、路径、Edit 的 old/new、Bash 输出，长内容已截断；Stop/SubagentStop 另有回答的短预览
 - `decision` / `rule_id` / `decision_reason`：这次有没有被规则或回复决定
 - `pending_id`：若正在或已经走过等待通道
 - `notify`：`disabled` 表示 notifier 没推；`queued_local` 表示只写了本地 outbox，没有 HTTP
+- `last_assistant_message` / `transcript_path`：Stop、SubagentStop 的最终回答和 transcript 路径；SubagentStop 还可能有 `agent_transcript_path`、`agent_type`、`agent_id`
+- `tool_response` / `error` / `is_interrupt`：PostToolUse、PostToolUseFailure 的返回或错误，主通知里截断，完整在 `.full.json`
+- `assistant_text`：助手文本打开时，MessageDisplay push 里的文本片段，用 `message_id` 归组
 
 增量读：记住上次看到的 `seq`，只处理更大的行。
 
@@ -102,6 +105,10 @@ WorktreeCreate 在 hooks 里保持同步：脚本自己建好 git worktree 并�
 
 等待超时（`wait_all.timeout_seconds`，默认 120，可用 `CC_BRIDGE_WAIT_ALL_TIMEOUT` 覆盖）要小于 hook timeout。WAIT 事件的 timeout 是 180 秒。SessionEnd 是 55 秒。失败策略：PreToolUse 和 PermissionRequest 超时 deny，Elicitation 超时 decline，Stop 超时放行结束。
 
+## 助手文本（默认关）
+
+MessageDisplay 自带 `delta`（助手文本片段）、`message_id`、`final`。要把 CC 中间的文本实时带给监督者，设 `CC_BRIDGE_ASSISTANT_TEXT=1`，或把 `config/bridge.json` 的 `assistant_text.enabled` 设为 `true`：插件会把 MessageDisplay 从 log 改成 push，通知里带 `assistant_text`、`message_id`、`turn_id`、`index`、`final`、`transcript_path`。选它而不是按偏移量读 transcript，是因为事件里已经有片段，不用处理文件增长、半行 JSON 和多个异步 hook 并发读取。片段按 `message_id` 归组，`final: true` 表示这条消息结束；某段超过 `log.max_field_chars` 时主通知截断，完整文本在同目录 `.full.json`。开关关闭时 MessageDisplay 仍是 log，行为与之前完全一致。
+
 ## 你的循环
 
 `claude -p` 放后台。每一轮先处理会卡住的 pending，再批量读 push：
@@ -113,17 +120,17 @@ python3 /path/to/cc-cursor-bridge/scripts/bridge.py push "$CC_TASK_ID"
 python3 /path/to/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
 ```
 
-`pending` 只列出还没有 `replies/<seq>.json` 的等待项。`push` 列出尚未消费的推送并前进游标；`--since <seq>` 从该序号之后再列一次。`watch` 把新出现的 pending 和 push 各打一行（`pending <路径>` 或 `push <路径>`），适合盯着看。加 `--once` 只打当前这一批。
+`pending` 只列出还没有 `replies/<seq>.json` 的等待项。`push` 列出尚未消费的推送并前进游标；`--since <seq>` 从该序号之后再列一次。`watch` 把新出现的 pending 和 push 各打一行（`pending <路径>` 或 `push <路径>`），适合盯着看。每行仍以路径开头，后面可能跟一段预览：`— reply: <回答第一行>`（Stop/SubagentStop）、`— response: <输出第一行>`（PostToolUse）、`— error: <错误第一行>`（PostToolUseFailure）、`— assistant: <文本第一行>`（助手文本打开时）。加 `--once` 只打当前这一批。
 
 回复是一个 JSON 对象：
 
 - PreToolUse：`{"decision":"allow|deny|ask|defer","reason":"...","updatedInput":{...}}`
 - PermissionRequest：`{"decision":"allow|deny","message":"...","updatedInput":{...}}`
 - Elicitation：`{"decision":"accept|decline"}`
-- Stop：这是验收。测试或要求还没满足时 `{"decision":"block","reason":"具体缺什么"}`，让 Claude Code 继续做；满足了就 `{"ack":true}` 结束。`stop_hook_active` 为 true 时，没有明确的 block 就让它停。每个任务最多阻断 `stop.max_blocks` 次（默认 3），到了上限即使再 block 也放行结束
+- Stop：这是验收。测试或要求还没满足时 `{"decision":"block","reason":"具体缺什么"}`，让 Claude Code 继续做；满足了就 `{"ack":true}` 结束。通知里的 `last_assistant_message` 是 CC 的最后一条回答，验收前先看它。`stop_hook_active` 为 true 时，没有明确的 block 就让它停。每个任务最多阻断 `stop.max_blocks` 次（默认 3），到了上限即使再 block 也放行结束
 - 其余事件在 `wait_all` 里才会要回复：可阻断的用 `{"decision":"block","reason":"..."}`，否则 `{"ack":true}`
 
-命令和文件内容超过上限时（默认命令 4000 字、文件内容 2000 字），短文件里该字段带 `truncated: true`、`original_length` 和 `sha256`，完整且已脱敏的正文在同目录的 `<seq>-<事件>.full.json`。命令被截断时，先读这份 `.full.json` 再决定 allow。
+命令和文件内容超过上限时（默认命令 4000 字、文件内容 2000 字），短文件里该字段是一个带 `text`、`truncated: true`、`original_length` 和 `sha256` 的对象，完整且已脱敏的正文在同目录的 `<seq>-<事件>.full.json`。Stop/SubagentStop 的 `last_assistant_message`、PostToolUse 的 `tool_response`、PostToolUseFailure 的 `error`、开关打开时的 `assistant_text` 也走同一套；其中工具返回和错误在主通知里按 `log.max_field_chars`（默认 240）截断。命令或回答被截断时，先读这份 `.full.json` 再决定 allow 或验收。
 
 PreToolUse 回 `allow` 会让这次工具调用跳过权限提示。只在你看过完整命令和路径之后才 allow。
 
