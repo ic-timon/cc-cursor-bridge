@@ -308,6 +308,7 @@ class BridgeTest(unittest.TestCase):
         self.assertFalse(cfg["notifier"]["enabled"])
         self.assertFalse(cfg["wait"]["enabled"])
         self.assertFalse(cfg["wait_all"]["enabled"])
+        self.assertFalse(cfg["assistant_text"]["enabled"])
         self.assertEqual(cfg["events"]["PreToolUse"], "wait")
         self.assertEqual(cfg["events"]["PostToolUse"], "push")
         self.assertEqual(cfg["events"]["MessageDisplay"], "log")
@@ -733,6 +734,111 @@ class BridgeTest(unittest.TestCase):
                 os.environ.pop("CC_BRIDGE_DIR", None)
             else:
                 os.environ["CC_BRIDGE_DIR"] = previous
+
+    def test_assistant_text_toggle_off_and_on(self):
+        push = self.bridge_dir / "tasks" / "task1" / "push"
+        self.environ["CC_BRIDGE_ASSISTANT_TEXT"] = "0"
+        bridge.handle_event(
+            {
+                "hook_event_name": "MessageDisplay",
+                "session_id": "sess",
+                "cwd": str(self.cwd),
+                "delta": "关闭时不推送",
+                "message_id": "msg-1",
+            },
+            self.environ,
+        )
+        self.assertFalse(any(push.glob("*-MessageDisplay.json")))
+
+        self.environ["CC_BRIDGE_ASSISTANT_TEXT"] = "1"
+        bridge.handle_event(
+            {
+                "hook_event_name": "MessageDisplay",
+                "session_id": "sess",
+                "cwd": str(self.cwd),
+                "delta": "中间文本\n下一行",
+                "final": False,
+                "index": 2,
+                "message_id": "msg-2",
+                "turn_id": "turn-1",
+                "transcript_path": "transcript.jsonl",
+            },
+            self.environ,
+        )
+        short = self.push_notice("MessageDisplay")
+        self.assertEqual(short["assistant_text"], "中间文本\n下一行")
+        self.assertEqual(short["message_id"], "msg-2")
+        self.assertEqual(short["turn_id"], "turn-1")
+        self.assertFalse(short["final"])
+        self.assertEqual(short["index"], 2)
+        self.assertEqual(short["transcript_path"], "transcript.jsonl")
+        self.assertEqual(short["summary"]["channel"], "push")
+
+    def test_assistant_text_config_and_env_override(self):
+        cfg = bridge.default_config()
+        cfg["assistant_text"]["enabled"] = True
+        cfg["log"]["max_field_chars"] = 10
+        delta = "长" * 30
+        bridge.handle_event(
+            {
+                "hook_event_name": "MessageDisplay",
+                "session_id": "sess",
+                "cwd": str(self.cwd),
+                "delta": delta,
+                "final": True,
+                "message_id": "msg-2",
+            },
+            self.environ,
+            cfg=cfg,
+        )
+        short = self.push_notice("MessageDisplay")
+        self.assertTrue(short["assistant_text"]["truncated"])
+        self.assertEqual(short["assistant_text"]["original_length"], len(delta))
+        self.assertTrue(short["truncated"])
+        full = self.full_notice(short)
+        self.assertEqual(full["assistant_text"], delta)
+        self.assertFalse(full["truncated"])
+
+        push = self.bridge_dir / "tasks" / "task1" / "push"
+        before = len(bridge.short_notices(push))
+        self.environ["CC_BRIDGE_ASSISTANT_TEXT"] = "0"
+        bridge.handle_event(
+            {
+                "hook_event_name": "MessageDisplay",
+                "session_id": "sess",
+                "cwd": str(self.cwd),
+                "delta": "环境变量关闭",
+                "message_id": "msg-3",
+            },
+            self.environ,
+            cfg=cfg,
+        )
+        self.assertEqual(len(bridge.short_notices(push)), before)
+
+    def test_cli_shows_assistant_text_preview(self):
+        self.environ["CC_BRIDGE_ASSISTANT_TEXT"] = "1"
+        bridge.handle_event(
+            {
+                "hook_event_name": "MessageDisplay",
+                "session_id": "sess",
+                "cwd": str(self.cwd),
+                "delta": "正在创建 fizzbuzz.py\n后续",
+                "message_id": "msg-1",
+            },
+            self.environ,
+        )
+        script = str(ROOT / "scripts" / "bridge.py")
+        env = os.environ.copy()
+        env["CC_BRIDGE_DIR"] = str(self.bridge_dir)
+        watched = subprocess.run(
+            [sys.executable, script, "watch", "task1", "--once"],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        self.assertEqual(watched.returncode, 0, watched.stderr)
+        self.assertIn("assistant: 正在创建 fizzbuzz.py", watched.stdout)
 
     def test_wait_all_reply_and_timeout(self):
         self.environ["CC_BRIDGE_WAIT_ALL"] = "1"

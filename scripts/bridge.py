@@ -169,6 +169,7 @@ def default_config() -> dict:
             "timeout_decision": "deny",
         },
         "log": {"max_field_chars": 240},
+        "assistant_text": {"enabled": False},
         "wait_all": {
             "enabled": False,
             "timeout_seconds": 120,
@@ -221,7 +222,7 @@ def load_config(root: Path, environ: dict) -> Tuple[dict, str]:
         return cfg, f"配置文件无法解析，已回退到内置配置: {exc}"
     if not isinstance(data, dict):
         return cfg, "配置文件不是对象，已回退到内置配置"
-    for key in ("notifier", "wait", "wait_all", "log", "pending", "stop", "events"):
+    for key in ("notifier", "wait", "wait_all", "log", "assistant_text", "pending", "stop", "events"):
         if isinstance(data.get(key), dict):
             cfg[key].update(data[key])
     return cfg, ""
@@ -232,6 +233,11 @@ def env_flag(environ: dict, name: str, default: bool) -> bool:
     if raw is None or raw == "":
         return default
     return raw.strip().lower() in TRUTHY
+
+
+def assistant_text_enabled(cfg: dict, environ: dict) -> bool:
+    block = cfg.get("assistant_text") or {}
+    return env_flag(environ, "CC_BRIDGE_ASSISTANT_TEXT", bool(block.get("enabled")))
 
 
 def safe_component(value: str) -> str:
@@ -1164,7 +1170,11 @@ def bounded_pair(value: Any, limit: int, secrets: List[str]) -> Tuple[Any, Any, 
 
 
 def notice_extra_fields(
-    event_name: str, event: dict, cfg: dict, secrets: List[str]
+    event_name: str,
+    event: dict,
+    cfg: dict,
+    secrets: List[str],
+    assistant_text: bool = False,
 ) -> Tuple[dict, dict, bool]:
     """Reply and tool-result fields that the compact summary would lose."""
     _, content_limit = pending_limits(cfg)
@@ -1180,6 +1190,22 @@ def notice_extra_fields(
         full[key] = whole
         truncated = truncated or was_truncated
 
+    if event_name == "MessageDisplay" and assistant_text:
+        delta = event.get("delta")
+        if isinstance(delta, str) and delta:
+            add("assistant_text", delta, log_limit)
+        transcript = event.get("transcript_path")
+        if isinstance(transcript, str) and transcript:
+            add("transcript_path", transcript, log_limit)
+        for key in ("message_id", "turn_id"):
+            value = event.get(key)
+            if isinstance(value, str) and value:
+                short[key] = truncate(value, log_limit, secrets)
+        if "final" in event:
+            short["final"] = bool(event.get("final"))
+        index = event.get("index")
+        if isinstance(index, int) and not isinstance(index, bool):
+            short["index"] = index
     if event_name in ("Stop", "SubagentStop"):
         message = event.get("last_assistant_message")
         if isinstance(message, str) and message:
@@ -1214,11 +1240,12 @@ def notice_body(
     cfg: dict,
     secrets: List[str],
     stdout: str,
+    assistant_text: bool = False,
 ) -> Tuple[dict, dict, bool]:
     short_input, input_truncated = pending_tool_view(tool_input, cfg, secrets, full=False)
     full_input, _ = pending_tool_view(tool_input, cfg, secrets, full=True)
     extra_short, extra_full, extra_truncated = notice_extra_fields(
-        event_name, event, cfg, secrets
+        event_name, event, cfg, secrets, assistant_text
     )
     body = {
         "seq": seq,
@@ -1388,6 +1415,11 @@ def handle_event(
         summary["config_note"] = truncate(" ".join(notes), limit, secrets)
 
     mode = resolve_event_mode(event_name, cfg, environ)
+    assistant_text = assistant_text_enabled(cfg, environ)
+    if event_name == "MessageDisplay" and assistant_text:
+        summary["assistant_text"] = "enabled"
+        if mode == "log":
+            mode = "push"
     watch = watch_paths_from_env(environ)
     wait_all = wait_all_settings(cfg, environ)
     if event_name == "SessionStart" and watch and mode == "wait" and not wait_all.get("enabled"):
@@ -1458,7 +1490,16 @@ def handle_event(
     blocked_by_probe = probe_stdout is not None and event_name not in ("WorktreeCreate", "WorktreeRemove")
     if not rule_id and not blocked_by_probe and mode in ("wait", "push"):
         body, full_body, was_truncated = notice_body(
-            seq, event_name, event, tool_name, tool_input, summary, cfg, secrets, stdout
+            seq,
+            event_name,
+            event,
+            tool_name,
+            tool_input,
+            summary,
+            cfg,
+            secrets,
+            stdout,
+            assistant_text=assistant_text,
         )
         if mode == "wait":
             body["reply_file"] = f"replies/{seq}.json"
@@ -1616,6 +1657,9 @@ def notice_annotation(path: Path) -> str:
     if event_name in ("Stop", "SubagentStop"):
         line = first_line(field_text(data.get("last_assistant_message")))
         return f"reply: {line}" if line else ""
+    if event_name == "MessageDisplay":
+        line = first_line(field_text(data.get("assistant_text")))
+        return f"assistant: {line}" if line else ""
     if event_name == "PostToolUse":
         line = first_line(field_text(data.get("tool_response")))
         return f"response: {line}" if line else ""

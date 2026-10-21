@@ -25,6 +25,9 @@
   "log": {
     "max_field_chars": 240
   },
+  "assistant_text": {
+    "enabled": false
+  },
   "wait_all": {
     "enabled": false,
     "timeout_seconds": 120,
