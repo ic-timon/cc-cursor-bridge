@@ -2,8 +2,9 @@
 """Run real claude -p sessions and record which hook events fire.
 
 Sandbox output stays under examples/sandbox/hook-harness/. This script writes
-tests/hooks/report.md and tests/hooks/report.json. It never passes a bypass
-or --dangerously-* flag.
+the full report to tests/hooks/out/ (gitignored). It never passes a bypass
+or --dangerously-* flag. The short summary that stays in git is
+tests/hooks/report.md, written by hand.
 """
 
 from __future__ import annotations
@@ -18,8 +19,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CLAUDE = Path.home() / ".local/bin/claude"
-REPORT_MD = ROOT / "tests" / "hooks" / "report.md"
-REPORT_JSON = ROOT / "tests" / "hooks" / "report.json"
+OUT = ROOT / "tests" / "hooks" / "out"
+REPORT_MD = OUT / "report.md"
+REPORT_JSON = OUT / "report.json"
 MCP = ROOT / "tests" / "hooks" / "stdio_mcp.py"
 SANDBOX_ROOT = ROOT / "examples" / "sandbox" / "hook-harness"
 
@@ -653,6 +655,7 @@ def main() -> int:
             for run in harness.runs
         ],
     }
+    OUT.mkdir(parents=True, exist_ok=True)
     REPORT_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     lines = [

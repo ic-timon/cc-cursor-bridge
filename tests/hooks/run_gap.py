@@ -14,8 +14,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CLAUDE = str(Path.home() / ".local" / "bin" / "claude")
-REPORT_MD = ROOT / "tests" / "hooks" / "report.md"
-REPORT_JSON = ROOT / "tests" / "hooks" / "report.json"
+OUT = ROOT / "tests" / "hooks" / "out"
+REPORT_MD = OUT / "report.md"
+REPORT_JSON = OUT / "report.json"
 FORBIDDEN = ("dangerously", "bypasspermissions", "bypass")
 
 
@@ -321,6 +322,7 @@ def merge(findings: dict, sandbox: Path) -> None:
         "outside_repo": "The same Write with no permission flags, cwd /tmp/ccb-probe-xcoc, created note.txt containing hi. Exit 0, no permission_denied line.",
     }
     report["gap_sandbox"] = str(sandbox)
+    OUT.mkdir(parents=True, exist_ok=True)
     REPORT_JSON.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     lines = [
         "# Hook harness report",
