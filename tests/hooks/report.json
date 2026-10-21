@@ -1,0 +1,1248 @@
+{
+  "sandbox": "/Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741",
+  "model": "haiku",
+  "model_note": "",
+  "init_tools_sample": [
+    "Task",
+    "Bash",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "Edit",
+    "EnterWorktree",
+    "ExitWorktree",
+    "ListAgents",
+    "LSP",
+    "NotebookEdit",
+    "Read",
+    "ReportFindings",
+    "ScheduleWakeup",
+    "SendMessage",
+    "Skill",
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskStop",
+    "TaskUpdate",
+    "ToolSearch",
+    "WebFetch",
+    "WebSearch",
+    "Workflow",
+    "Write"
+  ],
+  "events": [
+    {
+      "event": "SessionStart",
+      "fired": true,
+      "tasks": [
+        "tasks",
+        "tasks",
+        "tasks",
+        "bad-model",
+        "baseline",
+        "cwd",
+        "elicit",
+        "elicit",
+        "probe-deny",
+        "setup-init",
+        "slash-add-dir",
+        "slash-compact",
+        "slash-model",
+        "slash-model-sonnet",
+        "slash-ping",
+        "subagent",
+        "tool-fail",
+        "worktree",
+        "write-a",
+        "write-b",
+        "write-c",
+        "write-d",
+        "write-e",
+        "write-f",
+        "write-f"
+      ],
+      "payload_keys": [
+        "cwd",
+        "hook_event_name",
+        "session_id",
+        "source",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "Setup",
+      "fired": true,
+      "tasks": [
+        "baseline",
+        "setup-init"
+      ],
+      "payload_keys": [
+        "cwd",
+        "hook_event_name",
+        "session_id",
+        "transcript_path",
+        "trigger"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "InstructionsLoaded",
+      "fired": true,
+      "tasks": [
+        "baseline",
+        "setup-init",
+        "worktree"
+      ],
+      "payload_keys": [
+        "cwd",
+        "file_path",
+        "hook_event_name",
+        "load_reason",
+        "memory_type",
+        "session_id",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "UserPromptSubmit",
+      "fired": true,
+      "tasks": [
+        "tasks",
+        "tasks",
+        "tasks",
+        "bad-model",
+        "baseline",
+        "cwd",
+        "elicit",
+        "elicit",
+        "probe-deny",
+        "slash-ping",
+        "subagent",
+        "subagent",
+        "tool-fail",
+        "worktree",
+        "write-a",
+        "write-b",
+        "write-c",
+        "write-d",
+        "write-e",
+        "write-f",
+        "write-f"
+      ],
+      "payload_keys": [
+        "cwd",
+        "hook_event_name",
+        "permission_mode",
+        "prompt",
+        "prompt_id",
+        "session_id",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "UserPromptExpansion",
+      "fired": true,
+      "tasks": [
+        "slash-ping"
+      ],
+      "payload_keys": [
+        "command_args",
+        "command_name",
+        "command_source",
+        "cwd",
+        "expansion_type",
+        "hook_event_name",
+        "permission_mode",
+        "prompt",
+        "prompt_id",
+        "session_id",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "MessageDisplay",
+      "fired": true,
+      "tasks": [
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "bad-model",
+        "baseline",
+        "cwd",
+        "elicit",
+        "elicit",
+        "elicit",
+        "probe-deny",
+        "slash-ping",
+        "subagent",
+        "subagent",
+        "subagent",
+        "tool-fail",
+        "worktree",
+        "write-a",
+        "write-b",
+        "write-c",
+        "write-d",
+        "write-e",
+        "write-f"
+      ],
+      "payload_keys": [
+        "cwd",
+        "delta",
+        "final",
+        "hook_event_name",
+        "index",
+        "message_id",
+        "prompt_id",
+        "session_id",
+        "transcript_path",
+        "turn_id"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "PreToolUse",
+      "fired": true,
+      "tasks": [
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "baseline",
+        "cwd",
+        "elicit",
+        "elicit",
+        "probe-deny",
+        "slash-ping",
+        "subagent",
+        "tool-fail",
+        "write-a",
+        "write-b",
+        "write-c",
+        "write-d",
+        "write-e",
+        "write-f",
+        "write-f"
+      ],
+      "payload_keys": [
+        "cwd",
+        "hook_event_name",
+        "mcp_server",
+        "permission_mode",
+        "prompt_id",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_use_id",
+        "transcript_path"
+      ],
+      "decision_tested": "probe-deny:applied, write-b:applied",
+      "decision_honoured": "yes",
+      "notes": ""
+    },
+    {
+      "event": "PermissionRequest",
+      "fired": true,
+      "tasks": [
+        "write-a",
+        "write-b",
+        "write-c",
+        "write-d",
+        "write-e",
+        "write-f"
+      ],
+      "payload_keys": [
+        "cwd",
+        "hook_event_name",
+        "permission_mode",
+        "permission_suggestions",
+        "prompt_id",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "transcript_path"
+      ],
+      "decision_tested": "write-c:applied",
+      "decision_honoured": "see write experiments",
+      "notes": ""
+    },
+    {
+      "event": "PermissionDenied",
+      "fired": false,
+      "tasks": [],
+      "payload_keys": [],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": "NOT_TRIGGERABLE here: Write denials were safetyCheck/config rejects and did not emit PermissionDenied. Auto mode, which is what this hook documents, could not be entered on haiku (debug: model does not support auto mode)."
+    },
+    {
+      "event": "PostToolUse",
+      "fired": true,
+      "tasks": [
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "baseline",
+        "cwd",
+        "elicit",
+        "elicit",
+        "slash-ping",
+        "subagent",
+        "write-c",
+        "write-f"
+      ],
+      "payload_keys": [
+        "cwd",
+        "duration_ms",
+        "hook_event_name",
+        "mcp_server",
+        "permission_mode",
+        "prompt_id",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_response",
+        "tool_use_id",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "PostToolUseFailure",
+      "fired": true,
+      "tasks": [
+        "tool-fail"
+      ],
+      "payload_keys": [
+        "cwd",
+        "duration_ms",
+        "error",
+        "hook_event_name",
+        "is_interrupt",
+        "permission_mode",
+        "prompt_id",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_use_id",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "PostToolBatch",
+      "fired": true,
+      "tasks": [
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "tasks",
+        "baseline",
+        "cwd",
+        "elicit",
+        "elicit",
+        "probe-deny",
+        "slash-ping",
+        "subagent",
+        "tool-fail",
+        "write-a",
+        "write-b",
+        "write-c",
+        "write-d",
+        "write-e",
+        "write-f"
+      ],
+      "payload_keys": [
+        "cwd",
+        "hook_event_name",
+        "permission_mode",
+        "prompt_id",
+        "session_id",
+        "tool_calls",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "Notification",
+      "fired": true,
+      "tasks": [
+        "elicit"
+      ],
+      "payload_keys": [
+        "cwd",
+        "hook_event_name",
+        "message",
+        "notification_type",
+        "prompt_id",
+        "session_id",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "SubagentStart",
+      "fired": true,
+      "tasks": [
+        "subagent"
+      ],
+      "payload_keys": [
+        "agent_id",
+        "agent_type",
+        "cwd",
+        "hook_event_name",
+        "prompt_id",
+        "session_id",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "SubagentStop",
+      "fired": true,
+      "tasks": [
+        "subagent"
+      ],
+      "payload_keys": [
+        "agent_id",
+        "agent_transcript_path",
+        "agent_type",
+        "background_tasks",
+        "cwd",
+        "hook_event_name",
+        "last_assistant_message",
+        "permission_mode",
+        "prompt_id",
+        "session_crons",
+        "session_id",
+        "stop_hook_active",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "TaskCreated",
+      "fired": true,
+      "tasks": [
+        "tasks",
+        "tasks",
+        "tasks"
+      ],
+      "payload_keys": [
+        "cwd",
+        "hook_event_name",
+        "prompt_id",
+        "session_id",
+        "task_description",
+        "task_id",
+        "task_subject",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "TaskCompleted",
+      "fired": true,
+      "tasks": [
+        "tasks"
+      ],
+      "payload_keys": [
+        "cwd",
+        "hook_event_name",
+        "prompt_id",
+        "session_id",
+        "task_description",
+        "task_id",
+        "task_subject",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "Stop",
+      "fired": true,
+      "tasks": [
+        "tasks",
+        "bad-model",
+        "baseline",
+        "cwd",
+        "elicit",
+        "elicit",
+        "probe-deny",
+        "slash-ping",
+        "subagent",
+        "subagent",
+        "tool-fail",
+        "worktree",
+        "write-a",
+        "write-b",
+        "write-c",
+        "write-d",
+        "write-e",
+        "write-f"
+      ],
+      "payload_keys": [
+        "background_tasks",
+        "cwd",
+        "effort",
+        "hook_event_name",
+        "last_assistant_message",
+        "permission_mode",
+        "prompt_id",
+        "session_crons",
+        "session_id",
+        "stop_hook_active",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "StopFailure",
+      "fired": false,
+      "tasks": [],
+      "payload_keys": [],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": "NOT_TRIGGERABLE without a real API failure. --model not-a-real-model-probe still completed and replied ok through the proxy."
+    },
+    {
+      "event": "TeammateIdle",
+      "fired": false,
+      "tasks": [],
+      "payload_keys": [],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": "NOT_TRIGGERABLE: claude -p has no agent-team teammate lifecycle. TeammateIdle fires when a teammate is about to go idle, and this CLI session never starts a team."
+    },
+    {
+      "event": "ConfigChange",
+      "fired": true,
+      "tasks": [
+        "baseline"
+      ],
+      "payload_keys": [
+        "cwd",
+        "file_path",
+        "hook_event_name",
+        "prompt_id",
+        "session_id",
+        "source",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "CwdChanged",
+      "fired": false,
+      "tasks": [],
+      "payload_keys": [],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": "NOT_TRIGGERABLE in this headless run: scenario cwd asked Bash to `cd sub && pwd`. That did not emit CwdChanged. There is no separate -p cd control."
+    },
+    {
+      "event": "DirectoryAdded",
+      "fired": false,
+      "tasks": [],
+      "payload_keys": [],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": "NOT_TRIGGERABLE: --add-dir at launch did not emit DirectoryAdded, and claude -p /add-dir extra returned \"/add-dir isn't available in this environment.\""
+    },
+    {
+      "event": "FileChanged",
+      "fired": false,
+      "tasks": [],
+      "payload_keys": [],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": "NOT_TRIGGERABLE with the current plugin: FileChanged has no filename matcher, and SessionStart is async so a watchPaths reply is ignored. Touching cc-bridge-probe-watch during baseline did not fire it."
+    },
+    {
+      "event": "WorktreeCreate",
+      "fired": true,
+      "tasks": [
+        "worktree"
+      ],
+      "payload_keys": [
+        "cwd",
+        "hook_event_name",
+        "name",
+        "session_id",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "WorktreeRemove",
+      "fired": false,
+      "tasks": [],
+      "payload_keys": [],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": "--worktree fired WorktreeCreate, but exiting that -p process did not fire WorktreeRemove."
+    },
+    {
+      "event": "PreCompact",
+      "fired": false,
+      "tasks": [],
+      "payload_keys": [],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": "NOT_TRIGGERABLE: claude -p /compact returned 'Not enough messages to compact' and did not emit PreCompact or PostCompact."
+    },
+    {
+      "event": "PostCompact",
+      "fired": false,
+      "tasks": [],
+      "payload_keys": [],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": "NOT_TRIGGERABLE: same /compact result as PreCompact."
+    },
+    {
+      "event": "PreModelSwitch",
+      "fired": false,
+      "tasks": [],
+      "payload_keys": [],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": "/model haiku on an already-haiku session did not switch. /model sonnet did switch: the stream shows PreModelSwitch:claude-sonnet-5 with empty stdout, but this plugin's jsonl did not get that row (the async hook exited before the log flush). PostModelSwitch was logged."
+    },
+    {
+      "event": "PostModelSwitch",
+      "fired": true,
+      "tasks": [
+        "slash-model-sonnet"
+      ],
+      "payload_keys": [
+        "cache_ttl",
+        "context_tokens",
+        "cwd",
+        "estimated_cache_write_usd",
+        "from_model",
+        "hook_event_name",
+        "pricing",
+        "prompt_cache_warm",
+        "prompt_id",
+        "requested_model",
+        "session_id",
+        "source",
+        "to_model",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "Elicitation",
+      "fired": true,
+      "tasks": [
+        "elicit"
+      ],
+      "payload_keys": [
+        "cwd",
+        "hook_event_name",
+        "mcp_server_name",
+        "message",
+        "mode",
+        "prompt_id",
+        "requested_schema",
+        "session_id",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "ElicitationResult",
+      "fired": true,
+      "tasks": [
+        "elicit"
+      ],
+      "payload_keys": [
+        "action",
+        "cwd",
+        "hook_event_name",
+        "mcp_server_name",
+        "mode",
+        "prompt_id",
+        "session_id",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    },
+    {
+      "event": "SessionEnd",
+      "fired": true,
+      "tasks": [
+        "tasks",
+        "tasks",
+        "tasks",
+        "bad-model",
+        "baseline",
+        "cwd",
+        "elicit",
+        "elicit",
+        "probe-deny",
+        "setup-init",
+        "slash-add-dir",
+        "slash-compact",
+        "slash-model",
+        "slash-model-sonnet",
+        "slash-ping",
+        "subagent",
+        "tool-fail",
+        "worktree",
+        "write-a",
+        "write-b",
+        "write-c",
+        "write-d",
+        "write-e",
+        "write-f",
+        "write-f"
+      ],
+      "payload_keys": [
+        "cwd",
+        "hook_event_name",
+        "prompt_id",
+        "reason",
+        "session_id",
+        "transcript_path"
+      ],
+      "decision_tested": "none",
+      "decision_honoured": "n/a",
+      "notes": ""
+    }
+  ],
+  "write_experiments": [
+    {
+      "id": "write-a",
+      "label": "no hook decision, default permission mode",
+      "permission_request_fired": true,
+      "pretool_fired": true,
+      "pretool_probe": null,
+      "permission_probe": null,
+      "file_written": false,
+      "errors": [
+        "{\"type\": \"system\", \"subtype\": \"permission_denied\", \"tool_name\": \"Write\", \"decision_reason\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-a.txt which is a sensitive file.\", \"decision_reason_type\": \"safetyCheck\", \"message\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sa…[truncated]",
+        "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-a.txt which is a sensitive file."
+      ],
+      "exit_code": 0,
+      "timed_out": false
+    },
+    {
+      "id": "write-b",
+      "label": "PreToolUse permissionDecision allow",
+      "permission_request_fired": true,
+      "pretool_fired": true,
+      "pretool_probe": "applied",
+      "permission_probe": null,
+      "file_written": false,
+      "errors": [
+        "{\"type\": \"system\", \"subtype\": \"permission_denied\", \"tool_name\": \"Write\", \"decision_reason\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-b.txt which is a sensitive file.\", \"decision_reason_type\": \"safetyCheck\", \"message\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sa…[truncated]",
+        "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-b.txt which is a sensitive file."
+      ],
+      "exit_code": 0,
+      "timed_out": false
+    },
+    {
+      "id": "write-c",
+      "label": "PermissionRequest decision allow",
+      "permission_request_fired": true,
+      "pretool_fired": true,
+      "pretool_probe": null,
+      "permission_probe": "applied",
+      "file_written": true,
+      "errors": [],
+      "exit_code": 0,
+      "timed_out": false
+    },
+    {
+      "id": "write-d",
+      "label": "--permission-mode acceptEdits",
+      "permission_request_fired": true,
+      "pretool_fired": true,
+      "pretool_probe": null,
+      "permission_probe": null,
+      "file_written": false,
+      "errors": [
+        "{\"type\": \"system\", \"subtype\": \"permission_denied\", \"tool_name\": \"Write\", \"decision_reason\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-d.txt which is a sensitive file.\", \"decision_reason_type\": \"safetyCheck\", \"message\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sa…[truncated]",
+        "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-d.txt which is a sensitive file."
+      ],
+      "exit_code": 0,
+      "timed_out": false
+    },
+    {
+      "id": "write-e",
+      "label": "--allowedTools Write",
+      "permission_request_fired": true,
+      "pretool_fired": true,
+      "pretool_probe": null,
+      "permission_probe": null,
+      "file_written": false,
+      "errors": [
+        "{\"type\": \"system\", \"subtype\": \"permission_denied\", \"tool_name\": \"Write\", \"decision_reason\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-e.txt which is a sensitive file.\", \"decision_reason_type\": \"safetyCheck\", \"message\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sa…[truncated]",
+        "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-e.txt which is a sensitive file."
+      ],
+      "exit_code": 0,
+      "timed_out": false
+    },
+    {
+      "id": "write-f",
+      "label": "--permission-prompt-tool mcp__permit__approve",
+      "permission_request_fired": true,
+      "pretool_fired": true,
+      "pretool_probe": null,
+      "permission_probe": null,
+      "file_written": true,
+      "errors": [],
+      "exit_code": 0,
+      "timed_out": false
+    }
+  ],
+  "runs": [
+    {
+      "task": "tasks",
+      "exit_code": 0,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "MessageDisplay",
+        "PreToolUse",
+        "PostToolBatch",
+        "PostToolUse",
+        "MessageDisplay",
+        "PreToolUse",
+        "TaskCreated",
+        "PostToolUse",
+        "PostToolBatch",
+        "MessageDisplay",
+        "PreToolUse",
+        "SessionEnd",
+        "SessionStart",
+        "UserPromptSubmit",
+        "MessageDisplay",
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolBatch",
+        "MessageDisplay",
+        "PreToolUse",
+        "TaskCreated",
+        "PostToolUse",
+        "PostToolBatch",
+        "PreToolUse",
+        "SessionEnd",
+        "SessionStart",
+        "UserPromptSubmit",
+        "MessageDisplay",
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolBatch",
+        "PreToolUse",
+        "TaskCreated",
+        "PostToolUse",
+        "PostToolBatch",
+        "PreToolUse",
+        "PostToolUse",
+        "TaskCompleted",
+        "PostToolBatch",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": []
+    },
+    {
+      "task": "bad-model",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": []
+    },
+    {
+      "task": "baseline",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "Setup",
+        "InstructionsLoaded",
+        "SessionStart",
+        "UserPromptSubmit",
+        "ConfigChange",
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolBatch",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": []
+    },
+    {
+      "task": "cwd",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolBatch",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": []
+    },
+    {
+      "task": "elicit",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd",
+        "SessionStart",
+        "UserPromptSubmit",
+        "MessageDisplay",
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolBatch",
+        "PreToolUse",
+        "Elicitation",
+        "ElicitationResult",
+        "PostToolUse",
+        "Notification",
+        "PostToolBatch",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": []
+    },
+    {
+      "task": "probe-deny",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolBatch",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": [
+        "PreToolUse:Bash hook error: probe deny"
+      ]
+    },
+    {
+      "task": "setup-init",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "InstructionsLoaded",
+        "Setup",
+        "SessionStart",
+        "SessionEnd"
+      ],
+      "errors": []
+    },
+    {
+      "task": "slash-add-dir",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "SessionEnd"
+      ],
+      "errors": []
+    },
+    {
+      "task": "slash-compact",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "SessionEnd"
+      ],
+      "errors": []
+    },
+    {
+      "task": "slash-model",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "SessionEnd"
+      ],
+      "errors": []
+    },
+    {
+      "task": "slash-model-sonnet",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "PostModelSwitch",
+        "SessionEnd"
+      ],
+      "errors": []
+    },
+    {
+      "task": "slash-ping",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "UserPromptExpansion",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolBatch",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": []
+    },
+    {
+      "task": "subagent",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "MessageDisplay",
+        "PreToolUse",
+        "SubagentStart",
+        "PostToolUse",
+        "PostToolBatch",
+        "SubagentStop",
+        "MessageDisplay",
+        "Stop",
+        "UserPromptSubmit",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": []
+    },
+    {
+      "task": "tool-fail",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUseFailure",
+        "PostToolBatch",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": [
+        "Exit code 1"
+      ]
+    },
+    {
+      "task": "worktree",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "WorktreeCreate",
+        "InstructionsLoaded",
+        "SessionStart",
+        "UserPromptSubmit",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": []
+    },
+    {
+      "task": "write-a",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PermissionRequest",
+        "PostToolBatch",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": [
+        "{\"type\": \"system\", \"subtype\": \"permission_denied\", \"tool_name\": \"Write\", \"decision_reason\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-a.txt which is a sensitive file.\", \"decision_reason_type\": \"safetyCheck\", \"message\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sa…[truncated]",
+        "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-a.txt which is a sensitive file."
+      ]
+    },
+    {
+      "task": "write-b",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PermissionRequest",
+        "PostToolBatch",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": [
+        "{\"type\": \"system\", \"subtype\": \"permission_denied\", \"tool_name\": \"Write\", \"decision_reason\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-b.txt which is a sensitive file.\", \"decision_reason_type\": \"safetyCheck\", \"message\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sa…[truncated]",
+        "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-b.txt which is a sensitive file."
+      ]
+    },
+    {
+      "task": "write-c",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PermissionRequest",
+        "PostToolBatch",
+        "PostToolUse",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": []
+    },
+    {
+      "task": "write-d",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PermissionRequest",
+        "PostToolBatch",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": [
+        "{\"type\": \"system\", \"subtype\": \"permission_denied\", \"tool_name\": \"Write\", \"decision_reason\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-d.txt which is a sensitive file.\", \"decision_reason_type\": \"safetyCheck\", \"message\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sa…[truncated]",
+        "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-d.txt which is a sensitive file."
+      ]
+    },
+    {
+      "task": "write-e",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PermissionRequest",
+        "PostToolBatch",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": [
+        "{\"type\": \"system\", \"subtype\": \"permission_denied\", \"tool_name\": \"Write\", \"decision_reason\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-e.txt which is a sensitive file.\", \"decision_reason_type\": \"safetyCheck\", \"message\": \"Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sa…[truncated]",
+        "Claude requested permissions to edit /Users/timon/Sync/Test/cc-cursor-bridge/examples/sandbox/hook-harness/run-20261021-193741/write-e.txt which is a sensitive file."
+      ]
+    },
+    {
+      "task": "write-f",
+      "exit_code": null,
+      "timed_out": false,
+      "events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "SessionEnd",
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PermissionRequest",
+        "PostToolUse",
+        "PostToolBatch",
+        "MessageDisplay",
+        "Stop",
+        "SessionEnd"
+      ],
+      "errors": []
+    }
+  ]
+}

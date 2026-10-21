@@ -630,6 +630,115 @@ def wait_for_reply(task_dir: Path, request_id: str, pending_body: dict, wait: di
         time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
 
 
+def spec_matches(spec: dict, event: dict) -> bool:
+    if spec.get("event") != event.get("hook_event_name"):
+        return False
+    match = spec.get("match") or {}
+    if not isinstance(match, dict):
+        return False
+    if "tool_name" in match and event.get("tool_name") != match["tool_name"]:
+        return False
+    return True
+
+
+def render_probe_output(event_name: str, output: dict) -> str:
+    """Turn a probe output object into the hook stdout Claude Code reads."""
+    if not isinstance(output, dict):
+        raise ValueError("probe output must be an object")
+    if "hookSpecificOutput" in output:
+        body: Dict[str, Any] = output
+    elif event_name == "PermissionRequest":
+        decision = output.get("decision")
+        if isinstance(decision, str):
+            decision = {"behavior": decision}
+        elif not isinstance(decision, dict):
+            decision = {"behavior": output.get("behavior", "allow")}
+            if output.get("message"):
+                decision["message"] = output["message"]
+            if "updatedInput" in output:
+                decision["updatedInput"] = output["updatedInput"]
+        body = {
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": decision,
+            }
+        }
+    elif event_name == "PreToolUse":
+        hook: Dict[str, Any] = {"hookEventName": "PreToolUse"}
+        for key in (
+            "permissionDecision",
+            "permissionDecisionReason",
+            "updatedInput",
+            "additionalContext",
+        ):
+            if key in output:
+                hook[key] = output[key]
+        body = {"hookSpecificOutput": hook}
+    else:
+        hook_keys = (
+            "additionalContext",
+            "watchPaths",
+            "sessionTitle",
+            "initialUserMessage",
+            "permissionDecision",
+            "permissionDecisionReason",
+        )
+        hook = {"hookEventName": event_name}
+        top: Dict[str, Any] = {}
+        for key, value in output.items():
+            if key in hook_keys:
+                hook[key] = value
+            else:
+                top[key] = value
+        if len(hook) > 1:
+            top["hookSpecificOutput"] = hook
+        body = top
+    return json.dumps(body, ensure_ascii=False) + "\n"
+
+
+def take_probe_stdout(environ: dict, event: dict) -> Optional[str]:
+    """Return canned hook stdout for this event, or None when probe is unset.
+
+    CC_BRIDGE_PROBE points at {"responses": [{"event", "match"?, "once"?, "output"}]}.
+    A matching response is consumed once unless "once" is false. The default
+    hook behaviour is unchanged when the variable is unset.
+    """
+    raw = environ.get("CC_BRIDGE_PROBE") or ""
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(str(path))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    specs = data.get("responses") if isinstance(data, dict) else None
+    if not isinstance(specs, list):
+        raise ValueError("probe file needs a responses array")
+    used_path = Path(str(path) + ".used")
+    used_path.parent.mkdir(parents=True, exist_ok=True)
+    with used_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            handle.seek(0)
+            used = {int(part) for part in handle.read().split() if part.strip().isdigit()}
+            chosen = None
+            chosen_index = None
+            for index, spec in enumerate(specs):
+                if not isinstance(spec, dict) or index in used:
+                    continue
+                if spec_matches(spec, event):
+                    chosen = spec
+                    chosen_index = index
+                    break
+            if chosen is None:
+                return None
+            if chosen.get("once", True) and chosen_index is not None:
+                handle.write(f"{chosen_index}\n")
+                handle.flush()
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    return render_probe_output(str(event.get("hook_event_name") or ""), chosen.get("output") or {})
+
+
 def decision_stdout(event_name: str, decision: str, reason: str) -> str:
     if event_name == "PreToolUse":
         body = {
@@ -795,8 +904,21 @@ def handle_event(
     if ctx["rule_errors"]:
         summary["rule_errors"] = truncate("; ".join(ctx["rule_errors"]), limit, secrets)
 
+    probe_stdout = None
+    try:
+        probe_stdout = take_probe_stdout(environ, event)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        summary["probe_error"] = truncate(str(exc), limit, secrets)
+    if probe_stdout is not None and event_name not in ("WorktreeCreate", "WorktreeRemove"):
+        stdout = probe_stdout
+        decision = "probe"
+        reason = "CC_BRIDGE_PROBE"
+        summary["probe"] = "applied"
+    elif probe_stdout is not None:
+        summary["probe"] = "ignored_for_worktree_protocol"
+
     wait = wait_settings(cfg, environ)
-    if should_wait(event_name, wait, decision == "deny"):
+    if probe_stdout is None and should_wait(event_name, wait, decision == "deny"):
         pending_id = safe_file_id(str(event.get("tool_use_id") or ""))
         directory = task_dir_for(event, environ)
         pending_body = {
@@ -816,6 +938,7 @@ def handle_event(
         "event": event_name,
         "session_id": event.get("session_id") or "",
         "cwd": str(event.get("cwd") or ""),
+        "input_keys": sorted(str(key) for key in event.keys()),
         "summary": summary,
     }
     if event.get("prompt_id"):

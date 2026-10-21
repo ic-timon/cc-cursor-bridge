@@ -386,6 +386,72 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(refused.code, 1)
         self.assertTrue((self.cwd / "README").is_file())
 
+    def test_probe_allow_overrides_only_when_set(self):
+        denied, _ = self.run_pre("Bash", {"command": "rm -rf scratch"})
+        self.assertIn('"deny"', denied.stdout)
+        probe = self.root / "probe.json"
+        probe.write_text(
+            json.dumps(
+                {
+                    "responses": [
+                        {
+                            "event": "PreToolUse",
+                            "match": {"tool_name": "Write"},
+                            "output": {
+                                "permissionDecision": "allow",
+                                "permissionDecisionReason": "probe",
+                            },
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.environ["CC_BRIDGE_PROBE"] = str(probe)
+        result, lines = self.run_pre("Write", {"file_path": str(self.cwd / "note.txt"), "content": "hi"})
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["hookSpecificOutput"]["permissionDecision"], "allow")
+        self.assertEqual(lines[-1]["summary"]["probe"], "applied")
+        self.assertIn("input_keys", lines[-1])
+        # A different tool is unchanged: rm -rf still denied, and the Write probe is not reused.
+        denied, _ = self.run_pre("Bash", {"command": "rm -rf scratch"})
+        self.assertIn('"deny"', denied.stdout)
+
+    def test_probe_permission_request_shape(self):
+        probe = self.root / "probe-perm.json"
+        probe.write_text(
+            json.dumps(
+                {
+                    "responses": [
+                        {
+                            "event": "PermissionRequest",
+                            "match": {"tool_name": "Write"},
+                            "output": {"behavior": "allow"},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.environ["CC_BRIDGE_PROBE"] = str(probe)
+        result = bridge.handle_event(
+            {
+                "hook_event_name": "PermissionRequest",
+                "session_id": "sess",
+                "cwd": str(self.cwd),
+                "tool_name": "Write",
+                "tool_input": {"file_path": "note.txt", "content": "hi"},
+            },
+            self.environ,
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["hookSpecificOutput"]["decision"]["behavior"], "allow")
+
+    def test_unset_probe_does_not_read_a_file(self):
+        self.environ.pop("CC_BRIDGE_PROBE", None)
+        result, _ = self.run_pre("Bash", {"command": "echo hi"})
+        self.assertEqual(result.stdout, "")
+
 
 if __name__ == "__main__":
     unittest.main()

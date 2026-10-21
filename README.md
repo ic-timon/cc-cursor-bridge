@@ -233,7 +233,9 @@ python3 scripts/test_bridge.py
 /usr/bin/python3 scripts/test_bridge.py
 ```
 
-两条都应通过。覆盖 `rm -rf`、`git push --force`、`.env` / `.env.example`、`~/.ssh`、日志脱敏、等待超时、notifier 只写 outbox、worktree 往返。
+两条都应通过。覆盖 `rm -rf`、`git push --force`、`.env` / `.env.example`、`~/.ssh`、日志脱敏、等待超时、notifier 只写 outbox、worktree 往返，以及 `CC_BRIDGE_PROBE` 的探测回复。
+
+33 个 hook 的真实 `claude -p` 跑法在 `tests/hooks/run_all.py`。它把结果写到 `tests/hooks/report.md`。探测模式只在设置了 `CC_BRIDGE_PROBE` 时改变 hook 的 stdout，平时行为不变。
 
 带插件的 `claude -p` 自测在 `examples/sandbox/` 里做，不用 `--dangerously-skip-permissions`，也不全局安装。产物被 gitignore。2026-10-21 在 Claude Code 2.1.306 上跑过一次，`CC_TASK_ID=selftest1`，退出码 0，debug 里没有 unknown hook event。插件加载为 `cc-cursor-bridge@inline`，没有把 `claude-code-bridge` 这个 skill 装进 Claude。
 
