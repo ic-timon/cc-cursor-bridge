@@ -223,6 +223,25 @@
       "if": {
         "properties": {
           "event": {
+            "const": "plan.update"
+          }
+        },
+        "required": [
+          "event"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "events/plan.update.schema.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
             "const": "session.start"
           }
         },

@@ -20,3 +20,5 @@ python3 spec/tools/validate.py --jsonl /tmp/ahp.jsonl
 对 `demo-bridge-snapshot` 跑上面第三条，20 个实例里 19 个通过；`push/2-UserPromptSubmit.json` 不通过是已知差距（规范附录 A.6 第 14 条：旧通知不带 `prompt`）。
 
 本目录不改变 bridge 行为；`scripts/`、`claude/hooks/` 在 Phase 2 才按附录 A.6 修改。
+
+一致性测试套件在 `conformance/`：`python3 -m conformance`（见 `conformance/README.md`）。

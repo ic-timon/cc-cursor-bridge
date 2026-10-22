@@ -82,3 +82,10 @@ DEFAULT_DECISION = {
 }
 
 DEFAULT_TIMEOUT_MS = 120_000
+
+# Standard events with no 1:1 CC hook. The CC adapter synthesizes them.
+SYNTHESIZED = {
+    # ahp event:   (default class, allowed classes, CC source)
+    "plan.update": ("notify", ("notify",), "PostToolUse with tool_name TodoWrite"),
+}
+DEFAULT_DECISION.setdefault("plan.update", "ack")

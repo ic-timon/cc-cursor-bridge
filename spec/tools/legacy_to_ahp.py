@@ -40,6 +40,13 @@ def convert_notice(body: dict, kind: str, task_id: str, version: str) -> dict:
         payload[RENAMES.get(key, key)] = value
     if ahp_name == "session.start":
         payload.setdefault("source", (body.get("summary") or {}).get("source", "other"))
+    # Fields the legacy notice only kept in its (240-char) summary.
+    summary = body.get("summary") or {}
+    for key in ("message", "mcp_server_name", "mode", "reason", "source", "error", "prompt"):
+        if key in summary and key not in payload:
+            payload["server" if key == "mcp_server_name" else key] = summary[key]
+    if ahp_name == "message.delta" and "text" not in payload and "delta" in summary:
+        payload["text"] = summary["delta"]
     full_file = body.get("full_file")
     if full_file:  # spec: full_file also lives inside each truncation object
         for value in payload.values():
@@ -66,7 +73,7 @@ def convert_notice(body: dict, kind: str, task_id: str, version: str) -> dict:
         env["timeout_ms"] = DEFAULT_TIMEOUT_MS
         env["decisions"] = DECISIONS.get(ahp_name, ["ack"])
         env["default_decision"] = DEFAULT_DECISION.get(ahp_name, "ack")
-    if body.get("truncated"):
+    if body.get("truncated") and full_file:
         env["truncated"] = True
         env["full_file"] = full_file
     return env
@@ -118,3 +125,129 @@ def main(argv):
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
+
+
+# ---------------------------------------------------------------------------
+# Whole-directory conversion (used by conformance/producers/legacy_bridge.py)
+# ---------------------------------------------------------------------------
+
+LEGACY_LABELS = {
+    "allow": ("allow", "reply"), "deny": ("deny", "reply"), "ask": ("ask", "reply"),
+    "block": ("block", "reply"), "accept": ("accept", "reply"), "decline": ("decline", "reply"),
+    "ack": ("ack", "reply"), "context": ("ack", "reply"), "session": ("ack", "reply"),
+    "display": ("ack", "reply"), "path": ("ack", "reply"), "stop-hook-active": ("ack", "reply"),
+    "timeout-deny": ("deny", "timeout"), "timeout-decline": ("decline", "timeout"),
+    "timeout-allow-stop": ("ack", "timeout"), "timeout-noop": ("ack", "timeout"),
+    "stop-block-cap": ("ack", "rule"),
+}
+SUMMARY_META = {"channel", "delivery", "wait_all", "config_note", "probe", "session_start", "assistant_text",
+                "tool_use_id", "rule_errors", "wait"}
+
+
+def _rename_full(obj, old, new):
+    if isinstance(obj, dict):
+        if obj.get("full_file") == old:
+            obj["full_file"] = new
+        for v in obj.values():
+            _rename_full(v, old, new)
+    elif isinstance(obj, list):
+        for v in obj:
+            _rename_full(v, old, new)
+
+
+def _mark_nested(obj, full_file):
+    if isinstance(obj, dict):
+        if obj.get("truncated") is True and "sha256" in obj:
+            obj["full_file"] = full_file
+            return
+        for v in obj.values():
+            _mark_nested(v, full_file)
+
+
+def convert_record(rec: dict, task_id: str, version: str) -> dict:
+    cc_name = rec.get("event", "")
+    ahp_name, _, _ = CC_TO_AHP.get(cc_name, ("x-cc." + cc_name.lower(), "log", ("log",)))
+    cls = {"wait": "gate", "push": "notify"}.get(rec.get("channel"), "log")
+    summary = dict(rec.get("summary") or {})
+    payload = {RENAMES.get(k, k): v for k, v in summary.items() if k not in SUMMARY_META}
+    if ahp_name == "message.delta" and "delta" in payload:
+        payload["text"] = payload.pop("delta")
+    if summary.get("tool_name"):
+        tool_input = {k: payload.pop(k) for k in list(payload) if k in (
+            "command", "file_path", "path", "pattern", "glob", "old_string", "new_string", "content",
+            "description", "notebook_path")}
+        payload["tool_input"] = tool_input
+        if summary.get("tool_use_id"):
+            payload["tool_use_id"] = summary["tool_use_id"]
+    label = str(rec.get("decision") or "")
+    if rec.get("rule_id"):
+        outcome = {"decision": "deny", "via": "rule", "rule_id": rec["rule_id"]}
+    elif label in LEGACY_LABELS:
+        d, via = LEGACY_LABELS[label]
+        outcome = {"decision": d, "via": via}
+    else:
+        outcome = {"via": "none"}
+        if label:
+            outcome["reason"] = f"legacy decision label {label!r}"
+    if rec.get("decision_reason"):
+        outcome["reason"] = rec["decision_reason"]
+    env = {
+        "protocol": "ahp/1", "task_id": task_id, "seq": rec.get("seq"), "event": ahp_name, "class": cls,
+        "producer": {"name": "cc-cursor-bridge", "version": version, "host": {"name": "claude-code"}},
+        "ts": rec.get("ts"), "payload": payload,
+        "context": {k: rec[k] for k in ("session_id", "cwd", "prompt_id") if rec.get(k)},
+        "native": {"event": cc_name, "input_keys": rec.get("input_keys", [])},
+        "outcome": outcome,
+    }
+    return env
+
+
+def convert_dir(src: Path, dst: Path, task_id: str, version: str = "legacy") -> None:
+    """Write an AHP-shaped task dir from a legacy one. No capabilities.json and
+    no acks/ are invented: the legacy bridge does not produce them."""
+    import shutil
+    dst.mkdir(parents=True, exist_ok=True)
+    for kind in ("pending", "push"):
+        folder = src / kind
+        if not folder.is_dir():
+            continue
+        for path in folder.iterdir():
+            if path.name.endswith(".tmp") or path.name.startswith("."):
+                (dst / kind).mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, dst / kind / path.name)  # keep evidence of stray temp files
+                continue
+            if not path.name.endswith(".json") or path.name.endswith(".full.json"):
+                continue
+            body = json.loads(path.read_text(encoding="utf-8"))
+            env = convert_notice(body, kind, task_id, version)
+            new_name = f"{env['seq']}-{env['event']}"
+            old_full = body.get("full_file")
+            if old_full:
+                _mark_nested(env["payload"], old_full)
+                new_full = f"{kind}/{new_name}.full.json"
+                _rename_full(env, old_full, new_full)
+                env["full_file"] = new_full
+                full_src = src / old_full
+                (dst / kind).mkdir(parents=True, exist_ok=True)
+                if full_src.is_file():
+                    fbody = json.loads(full_src.read_text(encoding="utf-8"))
+                    fenv = convert_notice(dict(fbody, full_file=None, truncated=False), kind, task_id, version)
+                    fenv["ts"] = env["ts"]
+                    if kind == "pending":
+                        for key in ("deadline", "timeout_ms", "decisions", "default_decision", "reply_file"):
+                            fenv[key] = env.get(key, fenv.get(key))
+                    (dst / new_full).write_text(json.dumps(fenv, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            (dst / kind).mkdir(parents=True, exist_ok=True)
+            (dst / kind / f"{new_name}.json").write_text(json.dumps(env, ensure_ascii=False, indent=2) + "\n",
+                                                         encoding="utf-8")
+    if (src / "replies").is_dir():
+        (dst / "replies").mkdir(parents=True, exist_ok=True)
+        for path in (src / "replies").iterdir():
+            shutil.copy2(path, dst / "replies" / path.name)
+    if (src / "events.jsonl").is_file():
+        with open(dst / "events.jsonl", "w", encoding="utf-8") as out:
+            for line in (src / "events.jsonl").read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    out.write(json.dumps(convert_record(json.loads(line), task_id, version), ensure_ascii=False) + "\n")
+    if (src / "seq").is_file():
+        shutil.copy2(src / "seq", dst / "seq")

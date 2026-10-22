@@ -21,6 +21,10 @@
     {
       "id": "no-sudo",
       "enabled": true,
+      "required": true,
+      "tool_kinds": [
+        "shell"
+      ],
       "tools": [
         "Bash"
       ],

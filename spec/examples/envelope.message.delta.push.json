@@ -18,6 +18,7 @@
     "turn_id": "50a1da9a-89e7-401d-94c4-7efdb9bff67d",
     "index": 0,
     "final": true,
+    "kind": "text",
     "text": "`calc.py` 中实现了 `add(a, b)`，`test_calc.py` 用 `unittest` 覆盖了正整数、负数、浮点数和零值共 4 个用例。运行 `python3 -m unittest -v test_calc` 后 4 个用例全部通过（OK）。"
   },
   "context": {

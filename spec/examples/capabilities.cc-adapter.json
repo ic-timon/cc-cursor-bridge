@@ -12,7 +12,10 @@
   },
   "created_at": "2026-10-22T01:26:59.880+08:00",
   "transport": "local-fs",
-  "consumer_json": "applied",
+  "consumer_json": "partially_applied",
+  "consumer_notes": [
+    "timeouts_ms.turn.stop=300000 clamped to 170000"
+  ],
   "events": {
     "tool.pre": {
       "class": "gate",
@@ -454,6 +457,15 @@
         "notify"
       ]
     },
+    "plan.update": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify"
+      ],
+      "native": [
+        "PostToolUse(TodoWrite)"
+      ]
+    },
     "producer.error": {
       "class": "notify",
       "allowed_classes": [
@@ -482,10 +494,21 @@
       "bash-rm-rf",
       "bash-git-push-force",
       "secret-env-file",
-      "ssh-dir"
+      "ssh-dir",
+      "no-sudo"
     ],
     "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
-    "source": "config/rules.json"
+    "source": "config/rules.json + consumer.json",
+    "status": {
+      "bash-rm-rf": "applied",
+      "bash-git-push-force": "applied",
+      "secret-env-file": "applied",
+      "ssh-dir": "applied",
+      "no-sudo": "applied"
+    },
+    "required": [
+      "no-sudo"
+    ]
   },
   "redaction": {
     "methods": [

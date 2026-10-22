@@ -169,6 +169,10 @@
         "host_hook_timeout_ms": {
           "type": "integer",
           "minimum": 0
+        },
+        "max_gate_timeout_ms": {
+          "type": "integer",
+          "minimum": 1000
         }
       },
       "additionalProperties": {
@@ -193,8 +197,26 @@
         },
         "source": {
           "type": "string"
+        },
+        "status": {
+          "type": "object",
+          "additionalProperties": {
+            "enum": [
+              "applied",
+              "partially_applied",
+              "unapplied"
+            ]
+          },
+          "description": "Per rule id. A rule the producer cannot fully evaluate MUST NOT be reported as applied."
+        },
+        "required": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "redaction": {
       "type": "object",

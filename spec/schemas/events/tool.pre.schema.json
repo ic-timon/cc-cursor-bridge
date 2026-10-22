@@ -23,6 +23,22 @@
         "string",
         "null"
       ]
+    },
+    "tool_kind": {
+      "enum": [
+        "shell",
+        "edit",
+        "read",
+        "search",
+        "fetch",
+        "ask",
+        "other"
+      ],
+      "description": "Host-neutral tool category used by rules' tool_kinds (spec 4.3, 11)."
+    },
+    "command": {
+      "$ref": "../common.schema.json#/$defs/text",
+      "description": "shell kind only: POSIX-quoted join of argv, matched by command_regex."
     }
   },
   "additionalProperties": true,

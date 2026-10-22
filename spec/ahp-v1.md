@@ -1,6 +1,8 @@
 # Agent Hook Protocol v1（AHP v1，`ahp/1`）
 
-- 状态：**草案 1.0.0-draft.1**（2026-10-22），分支 `feat/ahp-v1-spec`，基线 cc-cursor-bridge `9f478f8`
+- 状态：**草案 1.0.0-draft.2**（2026-10-22），分支 `feat/ahp-v1-spec`，基线 cc-cursor-bridge `9f478f8`
+- draft.2 变更：吸收 RINO 开发 P0 对表的 8 项共识，见文末「变更记录」
+- 一致性测试：`python3 -m conformance`（见 `conformance/README.md`）
 - 机器可读部分：`spec/schemas/*.schema.json`（JSON Schema 2020-12）、`spec/examples/`
 - 校验：`python3 spec/tools/validate.py`；旧格式转换：`python3 spec/tools/legacy_to_ahp.py <task-dir>`
 
@@ -36,7 +38,7 @@ AHP v1 来自 cc-cursor-bridge 在 Claude Code 上的实际用法（33 个 hook�
 - consumer 遇到不认识的 **gate** 事件 SHOULD 回复 envelope 里的 `default_decision`，或不回复让超时生效；除非 `default_decision` 本身是 `ack`，MUST NOT 回复 allow / accept / ack 这类放行决定。
 - reply 的 schema 禁止未知字段（`additionalProperties: false`），扩展字段 MUST 以 `x-` 开头。producer 对含未知非 `x-` 字段的 reply MUST 按 invalid 处理（§9.4）。理由：审批答复里的拼写错误（如 `updatedinput`）被静默丢掉是安全问题。
 - envelope、capabilities、consumer.json 同样只允许已定义字段和 `x-` 扩展；新增字段只能随 minor 版本进入 schema。
-- 字段名 MUST 是 `snake_case`。事件名 MUST 匹配 `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`，扩展事件 MUST 以 `x-` 开头（例如 `x-cc.setup`）。
+- 字段名 MUST 是 `snake_case`。事件名 MUST 匹配 `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`。厂商私有事件 MUST 用 `x-<vendor>.` 前缀（例如 `x-rino.goal.change`、`x-cc.setup`），consumer 按 notify/log 的兼容规则对待。
 
 ## 3. 角色与能力协商
 
@@ -50,15 +52,16 @@ AHP v1 来自 cc-cursor-bridge 在 Claude Code 上的实际用法（33 个 hook�
 2. producer 在任务开始、写出第一个事件**之前** MUST 原子写出 `capabilities.json`（schema：`capabilities.schema.json`），写入后不再修改。它列出：
    - 每个事件的**生效**类（`class`）、允许的类、gate 的 `decisions`、`default_decision`、`timeout_ms`；
    - feature 开关（`acks`、`full_files`、`updated_input`、`additional_context`、`message_delta`、`policy_deny_event`、`consumer_rules`）；
-   - 截断上限、`max_blocks`、宿主 hook 超时；
-   - 静态规则的 id 列表和规则文件的 sha256；
+   - 截断上限、`max_blocks`；宿主 hook 超时 `host_hook_timeout_ms`（有宿主超时时 MUST 给出，进程内 producer 如 RINO 可以不填），以及 producer 自己允许的最长 gate 等待 `max_gate_timeout_ms`（不填宿主超时时 MUST 给出）；
+   - 静态规则的 id 列表、规则文件的 sha256、每条规则的 `status`（`applied | partially_applied | unapplied`）和 `required` 列表（§11）；
    - `consumer_json`：`absent | applied | partially_applied | rejected`，以及 `consumer_notes` 说明没采纳的项。
 3. producer 对 `consumer.json` 的处理：
    - MUST 只采纳 `allowed_classes` 内的类变更；
-   - MUST 把 `timeouts_ms` 夹在 `[1000, host_hook_timeout_ms − 10000]`（见 §10）；
-   - `extra_rules` MUST 只能增加拒绝，MUST NOT 关闭或放宽内置规则；
+   - MUST 把 `timeouts_ms` 夹在 `[1000, 上限]`：有 `host_hook_timeout_ms` 时上限是 `host_hook_timeout_ms − 10000`，没有时是 `limits.max_gate_timeout_ms`（§9.2）。任何一项被夹过，`consumer_json` MUST 是 `partially_applied`，并在 `consumer_notes` 写明原值和夹后的值；
+   - `extra_rules` MUST 只能增加拒绝，MUST NOT 关闭或放宽内置规则；producer 不能完整执行的规则 MUST 在 `rules.status` 里标成 `partially_applied` 或 `unapplied`，MUST NOT 静默跳过；
    - `consumer.json` 无法解析时 MUST 当作 `rejected`，按 producer 默认运行，并在 `consumer_notes` 里写明。
 4. consumer 读到 `capabilities.json` 后 MUST 检查 `protocol`。不支持时 consumer MUST NOT 回复任何 gate（让 producer 超时 → fail-closed），并 SHOULD 终止该任务。
+5. 标了 `required: true` 的规则如果不是 `applied`，consumer SHOULD 拒绝开始（终止任务、不回复任何 gate）。
 
 ## 4. 事件模型
 
@@ -86,9 +89,10 @@ AHP v1 来自 cc-cursor-bridge 在 Claude Code 上的实际用法（33 个 hook�
 | `session.end` | log | 否 | — | — | SessionEnd | 进程退出中，不得等待 |
 | `prompt.submit` | notify | 是 | ack / block | block | UserPromptSubmit | |
 | `prompt.expand` | notify | 是 | ack / block | block | UserPromptExpansion | 斜杠命令展开 |
-| `message.delta` | log | 否 | — | — | MessageDisplay | 助手文本片段；按 `message_id` 聚合，`final` 结束 |
+| `message.delta` | log | 否 | — | — | MessageDisplay | 助手文本片段；按 `message_id` 聚合，`final` 结束；可选 `kind: text\|reasoning`（§4.3） |
+| `plan.update` | notify | 否 | — | — | 由 PostToolUse(TodoWrite) 合成（附录 A.1） | 计划 / todo 列表变化，payload `items: [{content, status}]`，每次给全量 |
 | `tool.post` | notify | 是 | ack / block | ack | PostToolUse | 带 `tool_response` |
-| `tool.error` | notify | 是 | ack | ack | PostToolUseFailure | 带 `error`、`is_interrupt` |
+| `tool.error` | notify | 是 | ack | ack | PostToolUseFailure | 带 `error`、`is_interrupt`。运行时把审批中断作为 `permission.request` 发出时，MAY 不再为它发 `tool.error` |
 | `tool.batch` | log | 否 | — | — | PostToolBatch | |
 | `permission.denied` | log | 否 | — | — | PermissionDenied | 拒绝已发生 |
 | `subagent.start` | log | 否 | — | — | SubagentStart | |
@@ -117,6 +121,18 @@ v1 的**必需 gate 集合**是 `tool.pre`、`turn.stop`。`permission.request`�
 - 回答类事件：`last_assistant_message`（`turn.stop`、`subagent.stop`）。
 - 任何字符串字段都 MAY 被截断，截断后是截断对象（§8）。
 - 会话上下文（`session_id`、`cwd`、`transcript_path`、`prompt_id`、`permission_mode`、`turn_id`、`agent_id`）放在 envelope 的 `context`，不放 payload。
+- **子代理**：子代理的事件 MUST 用父任务的 `task_id`（同一个目录、同一条 seq），以 `context.agent_id` 区分；主代理的事件不带 `agent_id`。
+- **`tool.pre` 的规范化视图**（为了规则可移植）：payload MAY 带 `tool_kind`，取值 `shell | edit | read | search | fetch | ask | other`。`tool_kind = shell` 时 producer SHOULD 带 `command`：把 argv 按 POSIX shell 规则逐个 quote 后用空格拼接（Python `shlex.join` 的结果），供 `command_regex` 匹配。宿主本来就是命令字符串时（CC 的 Bash），`command` 就是那个字符串。
+- **`message.delta`**：`message_id` 是不透明字符串，consumer MUST NOT 解析；`index` 在同一个 `message_id` 内从 0 开始、连续无空洞；该消息的最后一个片段带 `final: true`。可选 `kind`：`text`（缺省）或 `reasoning`；producer 对 `reasoning` 片段 SHOULD 默认不发，需要时由 `consumer.json.features.reasoning_delta` 打开。
+- **`plan.update`**：`items` 是完整列表（不是增量），每项 `{content, status}`，`status` 取 `pending | in_progress | completed | cancelled`，MAY 带 `id`。
+
+### 4.4 gate 的实现方式
+
+gate MAY 由运行时以「中断本回合 → 外部裁决 → 恢复」的方式实现（例如 RINO 的 `approval/requested` → `decide_approval` → resume），不要求在同一个调用栈里阻塞，前提是：
+
+- 工具在收到 allow 之前 MUST NOT 执行；
+- `deadline`、`default_decision`、ack 和 fail-closed 语义与原地阻塞完全一致——中断期间到期一样按 `expired` 处理；
+- 进程在中断期间退出时，producer MUST 在退出前对未决 gate 写 `expired` ack 并采用默认决定（不能留下无 ack 的 pending）。
 
 ## 5. Envelope
 
@@ -230,7 +246,7 @@ producer 创建任务目录时 SHOULD 用 `0700`，文件 `0600`。
 | --- | --- |
 | `decision` | MUST。统一取值 `allow / deny / ask / block / accept / decline / ack`，且 MUST 在该 envelope 的 `decisions` 内 |
 | `reason` | 给运行时（和人）看的理由。`decision = block` 时 MUST 非空——它就是让智能体继续做的指示 |
-| `updated_input` | `tool.pre` / `permission.request` 且 `allow` 时可改写工具输入。producer 不支持时（`features.updated_input = false`）MUST 视为 invalid |
+| `updated_input` | `tool.pre` / `permission.request` 且 `allow` 时可改写工具输入。producer 不支持时（`features.updated_input = false`）MUST 视为 invalid。改写后 producer MUST 先对新输入**重跑静态规则**（命中 → deny，ack `via: rule`，发 `policy.deny`），再走剩余的 gate（例如 RINO 的 ApprovalGate），并在 `events.jsonl` 的 outcome 里记下实际执行的是改写后的输入。reply 不能改工具名：任何试图改 `tool_name` 的 reply（包括 `updated_input` 里带 `tool_name`）MUST 视为 invalid |
 | `additional_context` | 注入给智能体的额外上下文 |
 | `content` | `input.request` 且 `accept` 时的答案对象 |
 | `watch_paths`、`worktree_path`、`display_content` | 对应事件的专用字段 |
@@ -294,7 +310,12 @@ producer MUST NOT 因为自身失败而让宿主走「无答复」路径，只�
 | `turn.stop` | 120000 | ack（结束，`accepted: false`） |
 | 升级为 gate 的其他事件 | 120000 | 见 §4.2 |
 
-约束：`deadline` MUST 早于宿主自己的 hook 超时至少 10 秒（CC 现为 180 秒 → 最多 170 秒）。原因：宿主超时会把 hook 当作非阻塞错误继续执行，是 fail-open。
+约束：
+
+- 有宿主 hook 超时时，`deadline` MUST 早于它至少 10 秒（CC 现为 180 秒 → 最多 170 秒）。原因：宿主超时会把 hook 当作非阻塞错误继续执行，是 fail-open。
+- 没有宿主超时的进程内 producer（RINO），不填 `host_hook_timeout_ms`，改为声明 `limits.max_gate_timeout_ms`（RINO 计划 600000），所有 gate 超时 MUST 不超过它。
+- `turn.stop` 默认维持 120 秒。consumer MAY 经 `consumer.json.timeouts_ms` 申请更长（建议上限 300 秒，验收要跑测试）；producer 按 §3.3 夹紧（CC 为 170000）并报 `partially_applied`。
+- 等待 MUST 可取消：收到 SIGINT / cancel 时 producer 立刻按 `default_decision` 写 ack（`via: error`）。
 
 ### 9.3 turn.stop 的默认值（讨论与提议）
 
@@ -305,7 +326,8 @@ producer MUST NOT 因为自身失败而让宿主走「无答复」路径，只�
 1. `turn.stop` 的 `default_decision` 是 `ack`（结束本轮）。producer MUST 在 ack 文件里写 `accepted: false`，`via` 为 `timeout|error|invalid_reply`。
 2. consumer MUST NOT 把 `accepted: false` 的结束当作验收通过；SHOULD 把任务状态标成「未验收」并报告。
 3. 只有 consumer 明确 `decision: ack` 时 `accepted: true`。
-4. 防死循环：producer MUST 有 `max_blocks`（默认 3）。第 `max_blocks + 1` 次 block MUST 被当作 ack，ack 文件写 `accepted: false`、`reason` 说明达到上限。`stop_active`（CC 的 `stop_hook_active`）为真时，只有显式 block 才会再次阻断。
+4. producer SHOULD 把「未验收」带进自己的最终结果，例如 RINO 的结果行写 `accepted: false` 并以退出码 1 结束；CC 适配层可在 `session.end` 的 payload 里带 `accepted`。
+5. 防死循环：producer MUST 有 `max_blocks`（默认 3）。第 `max_blocks + 1` 次 block MUST 被当作 ack，ack 文件写 `accepted: false`、`reason` 说明达到上限。`stop_active`（CC 的 `stop_hook_active`）为真时，只有显式 block 才会再次阻断。
 
 ### 9.4 迟到、无效与 ack 文件
 
@@ -320,6 +342,8 @@ producer 对每个 gate MUST 写且只写一个 `acks/<seq>.json`（`ack.schema.
 - ack 在决定**执行之前**写出（崩溃时 consumer 至少知道 producer 打算做什么）。
 - deadline 之后才出现的 reply：producer 若仍在运行，SHOULD 检查一次，但 ack 已经是 `expired`，MUST NOT 改写。consumer 写 reply 后 SHOULD 读 ack 确认结果，看到 `expired` 时 MUST 认为自己的回答没有生效。
 - `reply_sha256` 记录被执行的 reply 文件字节的 SHA-256。
+- producer 自身出错（§9.1）时 ack 写 `status: expired`、`via: error`。
+- 静态规则直接拒绝、没有写 pending 的 `tool.pre` 不写 ack（它没有等待 consumer），只有 `events.jsonl` 记录和 `policy.deny`。
 
 ## 10. 时间
 
@@ -332,7 +356,9 @@ producer 对每个 gate MUST 写且只写一个 `acks/<seq>.json`（`ack.schema.
 - producer MUST 在发出 `tool.pre` gate 之前评估静态规则。按顺序，第一条命中的规则生效。
 - 命中即 deny：MUST NOT 写 pending，MUST NOT 被 reply、调试开关（CC 的 `wait_all`、`CC_BRIDGE_PROBE`）或 `consumer.json` 覆盖。
 - producer MUST 在 `events.jsonl` 记 `outcome.via = rule` 和 `rule_id`，并在 `features.policy_deny_event` 为真时发 `policy.deny` notify（9f478f8 尚未实现，Phase 2 补上），让 consumer 看见被拦了什么。
-- 规则内容不在协议里标准化，但 `capabilities.json` MUST 公布规则 id 和规则文件 sha256。v1 推荐的内置规则：递归强删（`rm -rf`、`Remove-Item -Recurse -Force`）、强推（`git push --force/-f/--force-with-lease`）、读写 `.env`（放行 `.env.example/.sample/.template`）、访问 `~/.ssh`。另有通用 `command_regex`、`path_regex`。
+- 规则内容不在协议里标准化，但 `capabilities.json` MUST 公布规则 id、规则文件 sha256 和每条规则的 `status`。
+- 规则的工具筛选：`tools`（宿主工具名，宿主专用）和 `tool_kinds`（§4.3 的规范化类别，可移植）任一命中即适用；只写了 `tool_kinds` 的规则对没有 `tool_kind` 的事件不适用。`command_regex` 匹配规范化的 `command`（shell 类）或宿主命令字符串。
+- 规则 MAY 带 `required: true`。producer 不能完整执行某条规则（不认识的匹配键、工具名对不上、拿不到 `command`）时，MUST 把它标成 `partially_applied` / `unapplied`；consumer 见到 required 规则不是 `applied` 时 SHOULD 拒绝开始（§3.3）。v1 推荐的内置规则：递归强删（`rm -rf`、`Remove-Item -Recurse -Force`）、强推（`git push --force/-f/--force-with-lease`）、读写 `.env`（放行 `.env.example/.sample/.template`）、访问 `~/.ssh`。另有通用 `command_regex`、`path_regex`。
 - 规则本身出错（正则无效、规则文件损坏）：MUST NOT 静默跳过。规则文件损坏 MUST 回退内置规则；单条正则无效时，该规则 SHOULD 对其适用工具一律 deny，并发 `producer.error`。
 - `consumer.json.extra_rules` 只能追加 deny 规则，排在内置规则之后。
 
@@ -360,11 +386,13 @@ producer 对每个 gate MUST 写且只写一个 `acks/<seq>.json`（`ack.schema.
 2. 宿主超时 ≥ deadline + 10 秒，否则宿主会在 producer 之前放弃并放行。
 3. 本地传输假定 producer 和 consumer 是同一用户。目录权限 0700 防其他本地用户伪造 reply。v1 不签名 reply；跨信任边界（沙箱 ↔ 宿主）时见 §14。
 4. 静态规则不能被 reply 放宽，保证「监督者 bot 被注入」时也挡得住最危险的操作。
-5. `updated_input` 能改写命令；consumer SHOULD 只在必要时使用，producer MUST 对改写后的输入**再跑一次**静态规则。
+5. `updated_input` 能改写命令；consumer SHOULD 只在必要时使用，producer MUST 对改写后的输入**再跑一次**静态规则，然后再过运行时剩余的权限层（§7.1）。
 6. 不监听端口、不发 HTTP 是 CC 适配层现有原则，v1 本地传输保持这一点。
 7. 绕过权限的宿主参数（CC 的 `--dangerously-skip-permissions`、`bypassPermissions`）会让 gate 失效；producer 在检测到此类模式时 SHOULD 拒绝启动或把所有 `tool.pre` 视为 deny。
 
-## 14. 沙箱传输（Phase 3，**未验证**）
+## 14. 沙箱传输（Phase 3，**已搁置、未验证**）
+
+> 2026-10-22：Cube/E2B 暂时搁置，Phase 3 传输层挂起。shadow 对比工具之后仍会做，但先针对本地（local-fs）后端。本节保留作记录。
 
 RINO 计划在 CubeSandbox（KVM MicroVM，兼容 E2B API）里跑。两种布局：
 
@@ -387,7 +415,15 @@ RINO 计划在 CubeSandbox（KVM MicroVM，兼容 E2B API）里跑。两种布�
 
 ### A.1 hook ↔ 事件
 
-机器可读版本：`spec/tools/ahp_map.py`（`CC_TO_AHP`、`DECISIONS`、`DEFAULT_DECISION`）。hook 同步/异步配置在 `claude/hooks/hooks.json`：四个 gate（PreToolUse、PermissionRequest、Elicitation、Stop）和 SessionStart、WorktreeCreate 同步（timeout 180 秒），其余 `async: true`（30 秒，SessionEnd 55 秒）。异步 hook 不能阻塞 CC，所以只有同步 hook 能被 consumer 升为 gate；把异步 hook 升为 gate 需要同时改 `hooks.json`。
+机器可读版本：`spec/tools/ahp_map.py`（`CC_TO_AHP`、`DECISIONS`、`DEFAULT_DECISION`、`SYNTHESIZED`）。
+
+合成事件：PostToolUse 且 `tool_name = TodoWrite` 时，适配层除 `tool.post` 外 MUST 再发一条 `plan.update`（`items` 取 `tool_input.todos` 的 `content`/`status`，`source: "TodoWrite"`）。
+
+`tool_kind` 映射：Bash、PowerShell → `shell`（`command` 即原命令）；Edit、MultiEdit、Write、NotebookEdit → `edit`；Read → `read`；Grep、Glob → `search`；WebFetch、WebSearch → `fetch`；AskUserQuestion → `ask`；其余（含 MCP 工具、Skill、Task）→ `other`。
+
+limits：`host_hook_timeout_ms = 180000`，因此 gate 超时上限 170000；也写 `max_gate_timeout_ms = 170000`。
+
+hook 同步/异步配置在 `claude/hooks/hooks.json`：四个 gate（PreToolUse、PermissionRequest、Elicitation、Stop）和 SessionStart、WorktreeCreate 同步（timeout 180 秒），其余 `async: true`（30 秒，SessionEnd 55 秒）。异步 hook 不能阻塞 CC，所以只有同步 hook 能被 consumer 升为 gate；把异步 hook 升为 gate 需要同时改 `hooks.json`。
 
 ### A.2 回复 → hook 输出
 
@@ -461,16 +497,31 @@ RINO 计划在 CubeSandbox（KVM MicroVM，兼容 E2B API）里跑。两种布�
 | 12 | 截断对象里没有 `full_file`（只在顶层） | 两处都写 |
 | 13 | Stop 的 `accepted` 状态没有落盘 | ack 写 `accepted` |
 | 14 | UserPromptSubmit 的 push 通知不带 `prompt` 正文（`summarize` 不收这个键），`legacy_to_ahp.py` 转出的 `prompt.submit` 因此不过 schema | 带 `prompt`（按 `content_chars` 截断） |
+| 15 | Stop/SubagentStop 通知里的 `transcript_path` 等路径也按 `content_chars` 截断成截断对象；路径一旦被截就没法用 | 路径字段 MUST 是完整字符串，不截断（schema 已要求 string） |
 
-## 附录 B：给 RINO 的开放问题
+## 附录 B：RINO P0 对表结论（draft.2）
 
-1. **事件命名**：v1 用 `<域>.<动作>` 小写点分（`tool.pre`、`turn.stop`、`input.request`）。RINO 的挂点能一一对上吗？有没有 RINO 独有、需要新增的事件（比如 `plan.update`、`sandbox.exec`）？
-2. **哪些是 gate**：v1 必需 gate 只有 `tool.pre`、`turn.stop`，另有条件 gate `permission.request`、`input.request`。RINO 是否有独立于 `tool.pre` 的第二层权限？没有的话 `permission.request` 就不出现在 capabilities 里，可以吗？
-3. **超时默认值**：gate 统一 120 秒，deadline 至少比宿主超时早 10 秒。RINO 的挂点自身有没有超时上限？`turn.stop` 要不要更长（比如 300 秒，验收要跑测试）？
-4. **turn.stop 失败语义**：提议「超时/出错 → 结束本轮，ack 写 `accepted: false`」。RINO 能否把「未验收」带进最终结果？
-5. **updated_input**：RINO 能否支持审批时改写工具输入？改写后会不会重新过静态规则？
-6. **message.delta**：RINO 能否给出流式片段（`message_id`/`index`/`final`），还是只有整条消息？
-7. **seq 与并发**：RINO 是单进程还是多进程/多子代理同时写同一任务？用 `flock` 还是进程内计数？
-8. **子代理**：子代理事件用同一个 `task_id`、靠 `context.agent_id` 区分，还是各开任务目录？
-9. **静态规则**：RINO 自己执行规则，还是读同一份 `rules.json`（共享 sha256）？
-10. **沙箱布局**：任务目录放沙箱内（方案 A，E2B files API）还是宿主挂载（方案 B）？
+RINO 开发的对表（`p0-mapping.md`，基于 RINO 根仓 8118bd5）回答了 draft.1 的十个问题，达成以下共识，已写进正文：
+
+| # | 共识 | 正文位置 |
+| --- | --- | --- |
+| 1 | `plan.update` 进标准（notify）；厂商事件用 `x-<vendor>.`（如 `x-rino.goal.change`） | §2.3、§4.2、§4.3、A.1 |
+| 2 | `tool.pre` 加可选 `tool_kind` 与 shell 类 `command`（POSIX quote 拼接）；规则加 `tool_kinds`；不能执行的规则标 `partially_applied/unapplied`；`required` 规则未完全执行时 consumer SHOULD 拒绝开始 | §3.3、§4.3、§11 |
+| 3 | `host_hook_timeout_ms` 可缺席，改用 `limits.max_gate_timeout_ms`；`turn.stop` 默认 120 秒，consumer 可申请到 300 秒，producer 夹紧并报 `partially_applied` | §3.3、§9.2 |
+| 4 | gate 可用「中断 → 外部裁决 → 恢复」实现；审批中断以 `permission.request` 发出时可不发 `tool.error` | §4.2、§4.4 |
+| 5 | `message.delta` 可选 `kind: text\|reasoning`（reasoning 默认关）；`message_id` 不透明；`index` 每条消息从 0 连续；最后一片 `final` | §4.3 |
+| 6 | 未验收 SHOULD 进入 producer 最终结果（RINO：`accepted:false` + 退出码 1） | §9.3 |
+| 7 | `updated_input` 后先重跑静态规则，再走剩余 gate；改工具名的 reply 无效 | §7.1、§13 |
+| 8 | 子代理共用 `task_id`，以 `context.agent_id` 区分 | §4.3 |
+
+RINO 侧的分阶段声明（供 consumer 参考，不是规范要求）：第一版只声明 `tool.pre`、`turn.stop` 两个 gate，`permission.request`、`input.request` 等中断→恢复接好后再声明；`updated_input`、`additional_context` 先为 false。
+
+仍开放：
+
+1. `reasoning` 片段打开的方式：先用 `consumer.json.features.reasoning_delta`，是否需要单独的事件名，留到 v1.1。
+2. 沙箱传输（§14）随 Cube/E2B 搁置。
+
+## 变更记录
+
+- **1.0.0-draft.2**（2026-10-22）：附录 B 的 8 项共识；ack 在 producer 出错与规则拒绝时的写法（§9.4）；§14 标注搁置；schema：新增 `events/plan.update`，`tool.pre` 加 `tool_kind`/`command`，`message.delta` 加 `kind`，`capabilities.rules` 加 `status`/`required`，`limits` 加 `max_gate_timeout_ms`，`consumer.extra_rules` 加 `tool_kinds`/`required`；新增一致性测试套件 `conformance/`。
+- **1.0.0-draft.1**（2026-10-22）：初稿。

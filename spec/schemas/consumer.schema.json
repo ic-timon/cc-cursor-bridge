@@ -63,7 +63,47 @@
         "type": "object",
         "required": [
           "id"
-        ]
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tool_kinds": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "shell",
+                "edit",
+                "read",
+                "search",
+                "fetch",
+                "ask",
+                "other"
+              ]
+            }
+          },
+          "command_regex": {
+            "type": "string"
+          },
+          "path_regex": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
       },
       "description": "Additional deny-only rules. Producers MUST NOT let these relax any built-in rule."
     },

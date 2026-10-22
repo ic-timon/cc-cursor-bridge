@@ -1,0 +1,46 @@
+{
+  "protocol": "ahp/1",
+  "task_id": "demo-bridge-snapshot",
+  "seq": 5,
+  "event": "tool.pre",
+  "class": "gate",
+  "producer": {
+    "name": "rino",
+    "version": "0.0.0",
+    "host": {
+      "name": "rino"
+    }
+  },
+  "ts": "2026-10-22T01:27:09.000+08:00",
+  "payload": {
+    "tool_name": "run_command",
+    "tool_kind": "shell",
+    "command": "sudo ls -la '/var/log'",
+    "tool_input": {
+      "argv": [
+        "sudo",
+        "ls",
+        "-la",
+        "/var/log"
+      ]
+    }
+  },
+  "context": {
+    "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+    "cwd": "/private/tmp/ccb-demo2-woqt",
+    "transcript_path": "/Users/timon/.claude/projects/-private-tmp-ccb-demo2-woqt/c3233cdc-54f0-49fc-be19-21f5b86a66fd.jsonl",
+    "prompt_id": "ae7e0386-efda-495b-b65e-70f711d9946c",
+    "permission_mode": "acceptEdits"
+  },
+  "native": {
+    "event": "x-rino.run_command"
+  },
+  "reply_file": "replies/5.json",
+  "deadline": "2026-10-22T01:29:09.000+08:00",
+  "timeout_ms": 120000,
+  "decisions": [
+    "allow",
+    "deny"
+  ],
+  "default_decision": "deny"
+}
