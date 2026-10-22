@@ -146,6 +146,11 @@
       "type": "object",
       "description": "Tool arguments. String values MAY be truncation objects.",
       "additionalProperties": true
+    },
+    "spec_version": {
+      "type": "string",
+      "pattern": "^1\\.\\d+\\.\\d+(-draft\\.[1-9]\\d*)?$",
+      "description": "1.<minor>.<patch>, optionally with the draft pre-release -draft.<N> (spec 2.2)."
     }
   }
 }

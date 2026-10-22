@@ -18,8 +18,7 @@
       "$ref": "common.schema.json#/$defs/protocol"
     },
     "spec_version": {
-      "type": "string",
-      "pattern": "^1\\.\\d+\\.\\d+$"
+      "$ref": "common.schema.json#/$defs/spec_version"
     },
     "task_id": {
       "$ref": "common.schema.json#/$defs/task_id"

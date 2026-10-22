@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from conformance.common import (  # noqa: E402
     DECISIONS, DEFAULT_DECISION, append_line, allowed_classes, default_class, now_iso,
-    read_json, reserve_seq, walk_truncations, write_atomic, CC_TO_AHP, EXTRA_EVENTS,
+    read_json, reserve_seq, walk_truncations, write_atomic, CC_TO_AHP, EXTRA_EVENTS, SPEC_VERSION,
 )
 
 NAME, VERSION = "ahp-replay", "0.1.0"
@@ -123,7 +123,7 @@ class Producer:
     def write_capabilities(self) -> None:
         rules_blob = json.dumps(self.rules, sort_keys=True, ensure_ascii=False).encode()
         caps = {
-            "protocol": "ahp/1", "spec_version": "1.0.0", "task_id": self.task,
+            "protocol": "ahp/1", "spec_version": "1.0-beta" if "bad_spec_version" in MUTATE else SPEC_VERSION, "task_id": self.task,
             "producer": {"name": NAME, "version": VERSION, "host": {"name": "scenario-replay"}},
             "created_at": now_iso(), "transport": "local-fs", "consumer_json": self.consumer_state,
             "events": self.events, "features": self.features,

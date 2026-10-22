@@ -21,6 +21,7 @@ MUTATIONS = {
     "crash_open": ["producer-error"],
     "truncate_context": ["context-limit"],
     "no_stray_ack": ["context-notify-reply"],
+    "bad_spec_version": ["gate-replies"],
 }
 
 

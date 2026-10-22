@@ -18,6 +18,10 @@
         "pattern": "^ahp/\\d+$"
       }
     },
+    "spec_version": {
+      "$ref": "common.schema.json#/$defs/spec_version",
+      "description": "Optional: the spec version the consumer was written against (spec 2.2). Informative only."
+    },
     "consumer": {
       "type": "object",
       "required": [
