@@ -1,0 +1,56 @@
+{
+  "id": "required-rule-tool-kind",
+  "title": "a required consumer rule matched by tool_kind + POSIX command denies a non-CC shell tool",
+  "source": [
+    "draft.2 #2"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "run_command",
+        "tool_kind": "shell",
+        "command": "sudo ls '/var/log'",
+        "tool_input": {
+          "argv": [
+            "sudo",
+            "ls",
+            "/var/log"
+          ]
+        }
+      }
+    }
+  ],
+  "consumer": [],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "deny",
+      "via": "rule",
+      "pending": false
+    }
+  ],
+  "consumer_json": {
+    "protocol": "ahp/1",
+    "consumer": {
+      "name": "RINO"
+    },
+    "extra_rules": [
+      {
+        "id": "no-sudo",
+        "required": true,
+        "tool_kinds": [
+          "shell"
+        ],
+        "reason": "no sudo",
+        "command_regex": "(^|[;&|\\n])\\s*sudo\\b"
+      }
+    ]
+  },
+  "required_rules": [
+    "no-sudo"
+  ]
+}

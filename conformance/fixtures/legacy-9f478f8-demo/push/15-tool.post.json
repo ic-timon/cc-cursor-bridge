@@ -1,0 +1,52 @@
+{
+  "protocol": "ahp/1",
+  "task_id": "demo-bridge-snapshot",
+  "seq": 15,
+  "event": "tool.post",
+  "class": "notify",
+  "producer": {
+    "name": "cc-cursor-bridge",
+    "version": "9f478f8",
+    "host": {
+      "name": "claude-code"
+    }
+  },
+  "ts": "2026-10-22T01:27:33.357+08:00",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "python3 -m unittest -v test_calc",
+      "description": "Run unittest suite verbosely"
+    },
+    "tool_use_id": "call_00_ET_VVW8NMVhMA387GVz9Dw93084",
+    "tool_response": {
+      "text": "{\"stdout\": \"test_add_floats (test_calc.TestAdd.test_add_floats) ... ok\\ntest_add_negative_numbers (test_calc.TestAdd.test_add_negative_numbers) ... ok\\ntest_add_positive_integers (test_calc.TestAdd.test_add_positive_integers) ... ok\\ntest_a…[truncated]",
+      "truncated": true,
+      "original_length": 484,
+      "sha256": "81d9e961210527c39c8da48b555daa31a205fd2be7df914b2f4ae52d8dffe343",
+      "full_file": "push/15-tool.post.full.json"
+    }
+  },
+  "context": {
+    "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+    "cwd": "/private/tmp/ccb-demo2-woqt"
+  },
+  "native": {
+    "event": "PostToolUse",
+    "input_keys": [
+      "cwd",
+      "duration_ms",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_response",
+      "tool_use_id",
+      "transcript_path"
+    ]
+  },
+  "truncated": true,
+  "full_file": "push/15-tool.post.full.json"
+}

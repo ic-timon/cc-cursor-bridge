@@ -1,0 +1,84 @@
+{
+  "id": "class-routing",
+  "title": "consumer.json can move events between classes within allowed_classes",
+  "source": [
+    "test_bridge.py::test_mode_routing_push_log_off_and_env",
+    "test_bridge.py::test_assistant_text_toggle_off_and_on",
+    "test_bridge.py::test_assistant_text_config_and_env_override",
+    "test_bridge.py::test_session_start_watch_does_not_wait"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "session.start",
+      "payload": {
+        "source": "startup"
+      }
+    },
+    {
+      "event": "message.delta",
+      "payload": {
+        "message_id": "m1",
+        "turn_id": "t1",
+        "index": 0,
+        "final": true,
+        "text": "hello"
+      }
+    },
+    {
+      "event": "tool.post",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "true"
+        },
+        "tool_response": ""
+      }
+    },
+    {
+      "event": "tool.batch",
+      "payload": {
+        "tool_calls": []
+      }
+    }
+  ],
+  "consumer": [],
+  "expect": [
+    {
+      "step": 0,
+      "class": "notify",
+      "pending": false
+    },
+    {
+      "step": 1,
+      "class": "notify"
+    },
+    {
+      "step": 2,
+      "class": "log"
+    },
+    {
+      "step": 3,
+      "class": "log"
+    }
+  ],
+  "consumer_json": {
+    "protocol": "ahp/1",
+    "consumer": {
+      "name": "conformance"
+    },
+    "event_classes": {
+      "message.delta": "notify",
+      "tool.post": "log"
+    }
+  },
+  "expect_task": {
+    "capabilities_class": {
+      "message.delta": "notify",
+      "tool.post": "log",
+      "tool.pre": "gate"
+    }
+  }
+}

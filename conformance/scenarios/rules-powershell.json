@@ -1,0 +1,54 @@
+{
+  "id": "rules-powershell",
+  "title": "PowerShell Remove-Item -Recurse -Force is rule-denied",
+  "source": [
+    "test_bridge.py::test_powershell_remove"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "PowerShell",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "Remove-Item -Recurse -Force C:\\tmp\\x"
+        }
+      }
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "PowerShell",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "Remove-Item C:\\tmp\\x.txt"
+        }
+      }
+    }
+  ],
+  "consumer": [
+    {
+      "match": {
+        "event": "tool.pre"
+      },
+      "action": "allow",
+      "reason": "ok",
+      "repeat": true
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "deny",
+      "via": "rule"
+    },
+    {
+      "step": 1,
+      "effect": "allow",
+      "via": "reply"
+    }
+  ]
+}

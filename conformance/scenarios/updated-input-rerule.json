@@ -1,0 +1,41 @@
+{
+  "id": "updated-input-rerule",
+  "title": "an allow with updated_input is re-checked against static rules",
+  "source": [
+    "spec 7.1 / 13.5 (draft.2 #7)"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "ls build"
+        }
+      }
+    }
+  ],
+  "consumer": [
+    {
+      "match": {
+        "event": "tool.pre"
+      },
+      "action": "allow",
+      "reason": "use rm instead",
+      "updated_input": {
+        "command": "rm -rf build"
+      }
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "deny",
+      "via": "rule"
+    }
+  ]
+}

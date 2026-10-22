@@ -1,0 +1,28 @@
+{
+  "id": "redaction-patterns",
+  "title": "SHOULD: token-shaped strings are redacted even when not in env",
+  "source": [
+    "spec 12.1 (SHOULD)"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "tool.post",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "cat cfg"
+        },
+        "tool_response": "token=ghp_PLANTEDpattern0123456789ABCDEFabcd"
+      }
+    }
+  ],
+  "consumer": [],
+  "expect": [],
+  "secrets": [
+    "ghp_PLANTEDpattern0123456789ABCDEFabcd"
+  ],
+  "level": "SHOULD"
+}

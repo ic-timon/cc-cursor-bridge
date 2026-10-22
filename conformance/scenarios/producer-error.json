@@ -1,0 +1,84 @@
+{
+  "id": "producer-error",
+  "title": "producer failures on a gate fail closed and are reported",
+  "source": [
+    "test_bridge.py::test_dispatch_cli",
+    "spec 9.1",
+    "spec A.6 #1/#2"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "ls"
+        }
+      },
+      "fault": "crash"
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "ls"
+        }
+      },
+      "fault": "bad_input"
+    },
+    {
+      "event": "permission.request",
+      "payload": {
+        "tool_name": "Write",
+        "tool_input": {
+          "file_path": "/p/a",
+          "content": "x"
+        }
+      },
+      "fault": "crash"
+    },
+    {
+      "event": "turn.stop",
+      "payload": {
+        "last_assistant_message": "done",
+        "stop_active": false
+      },
+      "fault": "crash"
+    }
+  ],
+  "consumer": [
+    {
+      "match": {},
+      "action": "allow",
+      "reason": "would allow",
+      "repeat": true
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "deny"
+    },
+    {
+      "step": 1,
+      "effect": "deny"
+    },
+    {
+      "step": 2,
+      "effect": "deny"
+    },
+    {
+      "step": 3,
+      "effect": "ack"
+    }
+  ],
+  "expect_task": {
+    "producer_error": true
+  }
+}

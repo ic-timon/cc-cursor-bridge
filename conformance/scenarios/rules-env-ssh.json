@@ -1,0 +1,86 @@
+{
+  "id": "rules-env-ssh",
+  "title": ".env and ~/.ssh are rule-denied; .env.example is allowed by the consumer",
+  "source": [
+    "test_bridge.py::test_env_and_ssh_paths"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Read",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "file_path": "/proj/.env"
+        }
+      }
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Read",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "file_path": "/proj/.env.example"
+        }
+      }
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "cat ~/.ssh/id_rsa"
+        }
+      }
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Edit",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "file_path": "/proj/.env.local",
+          "old_string": "a",
+          "new_string": "b"
+        }
+      }
+    }
+  ],
+  "consumer": [
+    {
+      "match": {
+        "event": "tool.pre"
+      },
+      "action": "allow",
+      "reason": "ok",
+      "repeat": true
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "deny",
+      "via": "rule"
+    },
+    {
+      "step": 1,
+      "effect": "allow",
+      "via": "reply"
+    },
+    {
+      "step": 2,
+      "effect": "deny",
+      "via": "rule"
+    },
+    {
+      "step": 3,
+      "effect": "deny",
+      "via": "rule"
+    }
+  ]
+}

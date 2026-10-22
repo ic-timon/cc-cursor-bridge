@@ -1,0 +1,80 @@
+{
+  "id": "gate-timeouts",
+  "title": "no reply: every gate times out to its fail-closed default",
+  "source": [
+    "test_bridge.py::test_wait_reply_and_timeout",
+    "test_bridge.py::test_wait_all_reply_and_timeout",
+    "test_bridge.py::test_elicitation_timeout_declines"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "ls"
+        }
+      }
+    },
+    {
+      "event": "permission.request",
+      "payload": {
+        "tool_name": "Write",
+        "tool_input": {
+          "file_path": "/p/a.py",
+          "content": "x"
+        }
+      }
+    },
+    {
+      "event": "input.request",
+      "payload": {
+        "server": "demo",
+        "message": "pick one",
+        "mode": "form",
+        "requested_schema": {
+          "type": "object"
+        }
+      }
+    },
+    {
+      "event": "turn.stop",
+      "payload": {
+        "last_assistant_message": "finished",
+        "stop_active": false
+      }
+    }
+  ],
+  "consumer": [],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "deny",
+      "via": "timeout",
+      "ack": "expired"
+    },
+    {
+      "step": 1,
+      "effect": "deny",
+      "via": "timeout",
+      "ack": "expired"
+    },
+    {
+      "step": 2,
+      "effect": "decline",
+      "via": "timeout",
+      "ack": "expired"
+    },
+    {
+      "step": 3,
+      "effect": "ack",
+      "via": "timeout",
+      "ack": "expired",
+      "accepted": false
+    }
+  ]
+}

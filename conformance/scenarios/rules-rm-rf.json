@@ -1,0 +1,77 @@
+{
+  "id": "rules-rm-rf",
+  "title": "rm -rf is denied by a static rule without a pending; plain rm reaches the gate",
+  "source": [
+    "test_bridge.py::test_rm_rf_denied_and_plain_rm_allowed",
+    "test_bridge.py::test_wait_all_rule_deny_has_no_pending"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "rm -rf build"
+        }
+      }
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "rm build.log"
+        }
+      }
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "cd /tmp && rm -fr x"
+        }
+      }
+    }
+  ],
+  "consumer": [
+    {
+      "match": {
+        "event": "tool.pre"
+      },
+      "action": "allow",
+      "reason": "ok",
+      "repeat": true
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "deny",
+      "via": "rule",
+      "pending": false
+    },
+    {
+      "step": 1,
+      "effect": "allow",
+      "via": "reply",
+      "ack": "consumed",
+      "pending": true
+    },
+    {
+      "step": 2,
+      "effect": "deny",
+      "via": "rule",
+      "pending": false
+    }
+  ],
+  "expect_task": {
+    "policy_deny_count": 2
+  }
+}

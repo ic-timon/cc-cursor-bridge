@@ -1,0 +1,362 @@
+{
+  "id": "demo-snapshot",
+  "title": "replay of demo-bridge-snapshot (calc add, haiku, 19 events)",
+  "source": [
+    "demo-bridge-snapshot (9f478f8, read-only)"
+  ],
+  "producer": {
+    "timeout_ms": 3000
+  },
+  "consumer_json": {
+    "protocol": "ahp/1",
+    "consumer": {
+      "name": "demo"
+    },
+    "event_classes": {
+      "message.delta": "notify"
+    }
+  },
+  "steps": [
+    {
+      "event": "session.start",
+      "payload": {
+        "source": "startup"
+      },
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 1
+    },
+    {
+      "event": "prompt.submit",
+      "payload": {
+        "prompt": "[prompt not captured by 9f478f8 (spec A.6 #14)]"
+      },
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 2
+    },
+    {
+      "event": "message.delta",
+      "payload": {
+        "text": "我先按 TDD 的顺序：写 calc.py 的 add 与 unittest 测试，然后运行 pytest... 不对，运行 `python3 -m unittest -v test_calc` 确认通过。\n\n我用 TDD 技能来把流程走对。",
+        "message_id": "30673625-75c8-4c09-8ca8-047c72f4c39a",
+        "turn_id": "50a1da9a-89e7-401d-94c4-7efdb9bff67d",
+        "final": true,
+        "index": 0
+      },
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 3
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Skill",
+        "tool_input": {
+          "skill": "superpowers:test-driven-development"
+        },
+        "tool_use_id": "call_00_1mcUFIvftmAAHrO3Kvvb7763"
+      },
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 4
+    },
+    {
+      "event": "tool.batch",
+      "payload": {},
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 5
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "ls -la /private/tmp/ccb-demo2-woqt",
+          "description": "List files in working directory"
+        },
+        "tool_use_id": "call_00_ToeKLi3MtNFYIIvmidlO9164"
+      },
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 6
+    },
+    {
+      "event": "tool.post",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "ls -la /private/tmp/ccb-demo2-woqt",
+          "description": "List files in working directory"
+        },
+        "tool_use_id": "call_00_ToeKLi3MtNFYIIvmidlO9164",
+        "tool_response": "{\"stdout\": \"total 0\\ndrwx------    2 timon  wheel     64 Oct 22 01:26 .\\ndrwxrwxrwt  410 root   wheel  13120 Oct 22 01:27 ..\", \"stderr\": \"\", \"interrupted\": false, \"isImage\": false, \"noOutputExpected\": false}"
+      },
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 7
+    },
+    {
+      "event": "tool.batch",
+      "payload": {},
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 8
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Write",
+        "tool_input": {
+          "file_path": "/private/tmp/ccb-demo2-woqt/calc.py",
+          "content": "def add(a, b):\n    return a + b\n"
+        },
+        "tool_use_id": "call_00_rAZx5kuyJBTmBmzF7YYC5654"
+      },
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 9
+    },
+    {
+      "event": "tool.post",
+      "payload": {
+        "tool_name": "Write",
+        "tool_input": {
+          "file_path": "/private/tmp/ccb-demo2-woqt/calc.py",
+          "content": "def add(a, b):\n    return a + b\n"
+        },
+        "tool_use_id": "call_00_rAZx5kuyJBTmBmzF7YYC5654",
+        "tool_response": "{\"type\": \"create\", \"filePath\": \"/private/tmp/ccb-demo2-woqt/calc.py\", \"content\": \"def add(a, b):\\n    return a + b\\n\", \"structuredPatch\": [], \"originalFile\": null, \"userModified\": false}"
+      },
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 10
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Write",
+        "tool_input": {
+          "file_path": "/private/tmp/ccb-demo2-woqt/test_calc.py",
+          "content": "import unittest\n\nfrom calc import add\n\n\nclass TestAdd(unittest.TestCase):\n    def test_add_positive_integers(self):\n        self.assertEqual(add(1, 2), 3)\n\n    def test_add_negative_numbers(self):\n        self.assertEqual(add(-4, -6), -10)\n\n    def test_add_floats(self):\n        self.assertAlmostEqual(add(0.1, 0.2), 0.3)\n\n    def test_add_with_zero(self):\n        self.assertEqual(add(0, 5), 5)\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
+        },
+        "tool_use_id": "call_01_eLfqWXNes3GimjJ2FsMo2696"
+      },
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 11
+    },
+    {
+      "event": "tool.post",
+      "payload": {
+        "tool_name": "Write",
+        "tool_input": {
+          "file_path": "/private/tmp/ccb-demo2-woqt/test_calc.py",
+          "content": "import unittest\n\nfrom calc import add\n\n\nclass TestAdd(unittest.TestCase):\n    def test_add_positive_integers(self):\n        self.assertEqual(add(1, 2), 3)\n\n    def test_add_negative_numbers(self):\n        self.assertEqual(add(-4, -6), -10)\n\n    def test_add_floats(self):\n        self.assertAlmostEqual(add(0.1, 0.2), 0.3)\n\n    def test_add_with_zero(self):\n        self.assertEqual(add(0, 5), 5)\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
+        },
+        "tool_use_id": "call_01_eLfqWXNes3GimjJ2FsMo2696",
+        "tool_response": "{\"type\": \"create\", \"filePath\": \"/private/tmp/ccb-demo2-woqt/test_calc.py\", \"content\": \"import unittest\\n\\nfrom calc import add\\n\\n\\nclass TestAdd(unittest.TestCase):\\n    def test_add_positive_integers(self):\\n        self.assertEqual(add(1, 2), 3)\\n\\n    def test_add_negative_numbers(self):\\n        self.assertEqual(add(-4, -6), -10)\\n\\n    def test_add_floats(self):\\n        self.assertAlmostEqual(add(0.1, 0.2), 0.3)\\n\\n    def test_add_with_zero(self):\\n        self.assertEqual(add(0, 5), 5)\\n\\n\\nif __name__ == \\\"__main__\\\":\\n    unittest.main()\\n\", \"structuredPatch\": [], \"originalFile\": null, \"userModified\": false}"
+      },
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 12
+    },
+    {
+      "event": "tool.batch",
+      "payload": {},
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 13
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "python3 -m unittest -v test_calc",
+          "description": "Run unittest suite verbosely"
+        },
+        "tool_use_id": "call_00_ET_VVW8NMVhMA387GVz9Dw93084"
+      },
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 14
+    },
+    {
+      "event": "tool.post",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "python3 -m unittest -v test_calc",
+          "description": "Run unittest suite verbosely"
+        },
+        "tool_use_id": "call_00_ET_VVW8NMVhMA387GVz9Dw93084",
+        "tool_response": "{\"stdout\": \"test_add_floats (test_calc.TestAdd.test_add_floats) ... ok\\ntest_add_negative_numbers (test_calc.TestAdd.test_add_negative_numbers) ... ok\\ntest_add_positive_integers (test_calc.TestAdd.test_add_positive_integers) ... ok\\ntest_add_with_zero (test_calc.TestAdd.test_add_with_zero) ... ok\\n\\n----------------------------------------------------------------------\\nRan 4 tests in 0.000s\\n\\nOK\", \"stderr\": \"\", \"interrupted\": false, \"isImage\": false, \"noOutputExpected\": false}"
+      },
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 15
+    },
+    {
+      "event": "tool.batch",
+      "payload": {},
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 16
+    },
+    {
+      "event": "message.delta",
+      "payload": {
+        "text": "`calc.py` 中实现了 `add(a, b)`，`test_calc.py` 用 `unittest` 覆盖了正整数、负数、浮点数和零值共 4 个用例。运行 `python3 -m unittest -v test_calc` 后 4 个用例全部通过（OK）。",
+        "message_id": "ba70df8d-deb7-4aea-ba43-537bdf206701",
+        "turn_id": "50a1da9a-89e7-401d-94c4-7efdb9bff67d",
+        "final": true,
+        "index": 0
+      },
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 17
+    },
+    {
+      "event": "turn.stop",
+      "payload": {
+        "last_assistant_message": "`calc.py` 中实现了 `add(a, b)`，`test_calc.py` 用 `unittest` 覆盖了正整数、负数、浮点数和零值共 4 个用例。运行 `python3 -m unittest -v test_calc` 后 4 个用例全部通过（OK）。",
+        "transcript_path": "/Users/timon/.claude/projects/-private-tmp-ccb-demo2-woqt/c3233cdc-54f0-49fc-be19-21f5b86a66fd.jsonl",
+        "stop_active": false
+      },
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 18
+    },
+    {
+      "event": "session.end",
+      "payload": {
+        "reason": "other"
+      },
+      "context": {
+        "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+        "cwd": "/private/tmp/ccb-demo2-woqt"
+      },
+      "x-source-seq": 19
+    }
+  ],
+  "consumer": [
+    {
+      "match": {
+        "event": "tool.pre",
+        "nth": 1
+      },
+      "action": "deny",
+      "reason": "tiny task, no skill needed; just write the files directly"
+    },
+    {
+      "match": {
+        "event": "tool.pre",
+        "nth": 2
+      },
+      "action": "allow",
+      "reason": "read-only"
+    },
+    {
+      "match": {
+        "event": "tool.pre",
+        "nth": 3
+      },
+      "action": "allow",
+      "reason": "edit inside worktree"
+    },
+    {
+      "match": {
+        "event": "tool.pre",
+        "nth": 4
+      },
+      "action": "allow",
+      "reason": "edit inside worktree"
+    },
+    {
+      "match": {
+        "event": "tool.pre",
+        "nth": 5
+      },
+      "action": "allow",
+      "reason": "run tests"
+    },
+    {
+      "match": {
+        "event": "turn.stop",
+        "nth": 1
+      },
+      "action": "ack"
+    }
+  ],
+  "expect": [
+    {
+      "step": 3,
+      "effect": "deny",
+      "ack": "consumed"
+    },
+    {
+      "step": 5,
+      "effect": "allow",
+      "ack": "consumed"
+    },
+    {
+      "step": 8,
+      "effect": "allow",
+      "ack": "consumed"
+    },
+    {
+      "step": 10,
+      "effect": "allow",
+      "ack": "consumed"
+    },
+    {
+      "step": 13,
+      "effect": "allow",
+      "ack": "consumed"
+    },
+    {
+      "step": 17,
+      "effect": "ack",
+      "ack": "consumed",
+      "accepted": true
+    }
+  ]
+}

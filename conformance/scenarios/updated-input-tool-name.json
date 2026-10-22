@@ -1,0 +1,42 @@
+{
+  "id": "updated-input-tool-name",
+  "title": "a reply that tries to change the tool name is invalid",
+  "source": [
+    "draft.2 #7"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "ls"
+        }
+      }
+    }
+  ],
+  "consumer": [
+    {
+      "match": {
+        "event": "tool.pre"
+      },
+      "action": "allow",
+      "reason": "read instead",
+      "updated_input": {
+        "tool_name": "Read",
+        "file_path": "/etc/hosts"
+      }
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "deny",
+      "ack": "invalid"
+    }
+  ]
+}

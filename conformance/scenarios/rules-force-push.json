@@ -1,0 +1,85 @@
+{
+  "id": "rules-force-push",
+  "title": "force pushes are rule-denied; a normal push is asked",
+  "source": [
+    "test_bridge.py::test_force_push"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "git push --force origin main"
+        }
+      }
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "git push -f"
+        }
+      }
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "git push --force-with-lease"
+        }
+      }
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "git -C repo push origin main"
+        }
+      }
+    }
+  ],
+  "consumer": [
+    {
+      "match": {
+        "event": "tool.pre"
+      },
+      "action": "allow",
+      "reason": "ok",
+      "repeat": true
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "deny",
+      "via": "rule"
+    },
+    {
+      "step": 1,
+      "effect": "deny",
+      "via": "rule"
+    },
+    {
+      "step": 2,
+      "effect": "deny",
+      "via": "rule"
+    },
+    {
+      "step": 3,
+      "effect": "allow",
+      "via": "reply",
+      "ack": "consumed"
+    }
+  ]
+}

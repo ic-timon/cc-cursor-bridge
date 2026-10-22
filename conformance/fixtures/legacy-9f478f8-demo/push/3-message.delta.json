@@ -1,0 +1,43 @@
+{
+  "protocol": "ahp/1",
+  "task_id": "demo-bridge-snapshot",
+  "seq": 3,
+  "event": "message.delta",
+  "class": "notify",
+  "producer": {
+    "name": "cc-cursor-bridge",
+    "version": "9f478f8",
+    "host": {
+      "name": "claude-code"
+    }
+  },
+  "ts": "2026-10-22T01:27:05.440+08:00",
+  "payload": {
+    "text": "我先按 TDD 的顺序：写 calc.py 的 add 与 unittest 测试，然后运行 pytest... 不对，运行 `python3 -m unittest -v test_calc` 确认通过。\n\n我用 TDD 技能来把流程走对。",
+    "message_id": "30673625-75c8-4c09-8ca8-047c72f4c39a",
+    "turn_id": "50a1da9a-89e7-401d-94c4-7efdb9bff67d",
+    "final": true,
+    "index": 0
+  },
+  "context": {
+    "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+    "cwd": "/private/tmp/ccb-demo2-woqt",
+    "transcript_path": "/Users/timon/.claude/projects/-private-tmp-ccb-demo2-woqt/c3233cdc-54f0-49fc-be19-21f5b86a66fd.jsonl",
+    "turn_id": "50a1da9a-89e7-401d-94c4-7efdb9bff67d"
+  },
+  "native": {
+    "event": "MessageDisplay",
+    "input_keys": [
+      "cwd",
+      "delta",
+      "final",
+      "hook_event_name",
+      "index",
+      "message_id",
+      "prompt_id",
+      "session_id",
+      "transcript_path",
+      "turn_id"
+    ]
+  }
+}

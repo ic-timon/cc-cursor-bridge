@@ -1,0 +1,61 @@
+{
+  "id": "stop-loop-guard",
+  "title": "turn.stop blocks are capped by max_blocks; the cap ends the turn unaccepted",
+  "source": [
+    "test_bridge.py::test_stop_loop_guard"
+  ],
+  "producer": {
+    "timeout_ms": 1500,
+    "max_blocks": 2
+  },
+  "steps": [
+    {
+      "event": "turn.stop",
+      "payload": {
+        "last_assistant_message": "v1",
+        "stop_active": false
+      }
+    },
+    {
+      "event": "turn.stop",
+      "payload": {
+        "last_assistant_message": "v2",
+        "stop_active": true
+      }
+    },
+    {
+      "event": "turn.stop",
+      "payload": {
+        "last_assistant_message": "v3",
+        "stop_active": true
+      }
+    }
+  ],
+  "consumer": [
+    {
+      "match": {
+        "event": "turn.stop"
+      },
+      "action": "block",
+      "reason": "add a test",
+      "repeat": true
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "block",
+      "ack": "consumed"
+    },
+    {
+      "step": 1,
+      "effect": "block",
+      "ack": "consumed"
+    },
+    {
+      "step": 2,
+      "effect": "ack",
+      "accepted": false
+    }
+  ]
+}

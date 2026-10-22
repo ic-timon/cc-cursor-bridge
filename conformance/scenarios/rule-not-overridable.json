@@ -1,0 +1,52 @@
+{
+  "id": "rule-not-overridable",
+  "title": "a consumer that would allow everything cannot override a rule deny",
+  "source": [
+    "test_bridge.py::test_probe_allow_overrides_only_when_set (protocol part)"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "rm -rf /"
+        }
+      }
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "echo ok"
+        }
+      }
+    }
+  ],
+  "consumer": [
+    {
+      "match": {},
+      "action": "allow",
+      "reason": "yes to all",
+      "repeat": true
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "deny",
+      "via": "rule",
+      "pending": false
+    },
+    {
+      "step": 1,
+      "effect": "allow"
+    }
+  ]
+}
