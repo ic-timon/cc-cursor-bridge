@@ -31,6 +31,14 @@ is printed so the expected list can be shrunk with `--update-expected`.
 | `expected/legacy-9f478f8.json` | expected failures of the current bridge |
 | `MAPPING.md` | the 36 bridge unit tests → scenarios / N/A |
 
+## Example drift check
+
+`spec/examples/capabilities.cc-adapter.json` is generated from the CC adapter, not hand-written:
+`python3 -m conformance.cc_example --write` runs `scripts/dispatch.py` once with
+`spec/examples/consumer.rino.json` and the default config, and saves the `capabilities.json` it
+writes. A full `python3 -m conformance` run (and `conformance.selftest`) fails if the example and
+the adapter output differ (only `created_at` is ignored). Skipped when `scripts/ahp_cc.py` is absent.
+
 ## Adapter contract (how to plug in a producer)
 
 A producer under test is a command:
