@@ -1,0 +1,25 @@
+{
+  "description": "CC adapter (reference) vs the conformance reference producer conformance/producers/replay.py (candidate). Used by tools/shadow_diff/tests.py; also a worked example of an allowlist.",
+  "include": ["cc-known.json"],
+  "allow": [
+    {
+      "id": "replay-no-tool-kind",
+      "code": "D08",
+      "path": "tool.pre.payload.*",
+      "cand": "<absent>",
+      "reason": "replay.py does not fill the optional tool_kind/command view (spec 4.3 SHOULD); the CC adapter does."
+    },
+    {
+      "id": "replay-no-reply-producer-error",
+      "code": "D01",
+      "event": "producer.error",
+      "reason": "The CC adapter also emits producer.error for invalid replies and context-limit rejects (spec 9.1 SHOULD); replay.py only for its own faults."
+    },
+    {
+      "id": "replay-todowrite-no-tool-post",
+      "code": "D01",
+      "path": "sequence.missing.tool.post",
+      "reason": "For a TodoWrite PostToolUse the CC adapter emits tool.post and the synthesized plan.update (spec A.1); replay.py's plan-update step is the plan.update alone."
+    }
+  ]
+}
