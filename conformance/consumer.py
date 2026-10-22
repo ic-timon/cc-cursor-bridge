@@ -11,6 +11,9 @@ Script items (first match wins; each item is used once unless "repeat": true):
 - late: waits until the envelope deadline + 300 ms, then writes a valid reply
   with `decision` (default the first non-default decision).
 - none: never replies.
+- "source": "push" on an item makes it answer a notify event (a file in push/)
+  instead of a pending gate. Spec 7.3 #1: the producer must not apply it and must
+  write an invalid ack.
 Replies are written atomically. Pending files in the 9f478f8 legacy format are
 understood too (flat body, CC hook name in "event"), so the same scenarios can
 drive the legacy bridge.
@@ -51,11 +54,13 @@ class ScriptedConsumer:
             t.join(timeout=grace_s)
 
     # ---------- matching ----------
-    def _choose(self, event: str, nth: int, doc: dict) -> Optional[dict]:
+    def _choose(self, event: str, nth: int, doc: dict, source: str = "pending") -> Optional[dict]:
         payload = doc.get("payload") if "protocol" in doc else doc
         tool = (payload or {}).get("tool_name") or doc.get("tool_name")
         for item in self.script:
             if item["_used"] and not item.get("repeat"):
+                continue
+            if item.get("source", "pending") != source:
                 continue
             m = item.get("match") or {}
             if m.get("event") and m["event"] != event:
@@ -86,25 +91,37 @@ class ScriptedConsumer:
     # ---------- loop ----------
     def _loop(self) -> None:
         pending = self.dir / "pending"
+        push = self.dir / "push"
+        wants_push = any(item.get("source") == "push" for item in self.script)
         while not self._stop.is_set():
+            if wants_push and push.is_dir():
+                self._scan(push, "push")
             if pending.is_dir():
-                for path in sorted(pending.glob("*.json")):
-                    if path.name.endswith(".full.json") or path.name.startswith("."):
-                        continue
-                    try:
-                        doc = read_json(path)
-                    except (OSError, json.JSONDecodeError):
-                        continue
-                    seq, event = self._identify(doc)
-                    if not seq or seq in self.seen:
-                        continue
-                    self.counts[event] = self.counts.get(event, 0) + 1
-                    item = self._choose(event, self.counts[event], doc) or {"action": "none"}
-                    self.seen[seq] = item
-                    t = threading.Thread(target=self._act, args=(seq, event, doc, item), daemon=True)
-                    self._threads.append(t)
-                    t.start()
+                self._scan(pending, "pending")
             time.sleep(0.03)
+
+    def _scan(self, folder: Path, source: str) -> None:
+        for path in sorted(folder.glob("*.json")):
+            if path.name.endswith(".full.json") or path.name.startswith("."):
+                continue
+            try:
+                doc = read_json(path)
+            except (OSError, json.JSONDecodeError):
+                continue
+            seq, event = self._identify(doc)
+            if not seq or seq in self.seen:
+                continue
+            if source == "push":
+                item = self._choose(event, 0, doc, "push")
+                if item is None:
+                    continue
+            else:
+                self.counts[event] = self.counts.get(event, 0) + 1
+                item = self._choose(event, self.counts[event], doc) or {"action": "none"}
+            self.seen[seq] = item
+            t = threading.Thread(target=self._act, args=(seq, event, doc, item), daemon=True)
+            self._threads.append(t)
+            t.start()
 
     def _act(self, seq: int, event: str, doc: dict, item: dict) -> None:
         action = item.get("action", "none")

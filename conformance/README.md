@@ -24,12 +24,12 @@ that now passes) is printed so the list can be shrunk with `--update-expected`.
 | Path | What |
 | --- | --- |
 | `harness.py` | runs one scenario: temp root, optional `consumer.json`, scripted consumer, producer adapter, checks |
-| `consumer.py` | scripted consumer: replies on cue (allow/deny/ask/block/ack/accept/decline/invalid/raw/late/none) |
-| `checks.py` | generic checks G01–G17 over a task dir, scenario expectations E00–E11 |
+| `consumer.py` | scripted consumer: replies on cue (allow/deny/ask/block/ack/accept/decline/invalid/raw/late/none); `source: "push"` items reply to notify events (spec 7.3 #1) |
+| `checks.py` | generic checks G01–G17 over a task dir, scenario expectations E00–E13 |
 | `producers/replay.py` | reference producer: replays scenario host events and implements the producer side of the spec |
 | `producers/legacy_bridge.py` | drives `scripts/dispatch.py` as of 9f478f8 (extracted with `git archive` into `$TMPDIR/ahp-conformance-<uid>/`) per step, converts with `legacy_to_ahp.convert_dir` |
 | `producers/cc_adapter.py` | drives this checkout's hooks.json commands (`dispatch.py <Hook>`) per step; the bridge writes the AHP tree itself |
-| `scenarios/*.json` | 22 scenarios (`tools/build_scenarios.py`, `tools/snapshot_to_scenario.py` regenerate them) |
+| `scenarios/*.json` | 26 scenarios (`tools/build_scenarios.py`, `tools/snapshot_to_scenario.py` regenerate them) |
 | `fixtures/legacy-9f478f8-demo/` | `demo-bridge-snapshot` converted to AHP shape, checked statically |
 | `expected/legacy-9f478f8.json` | expected failures of the pre-AHP bridge (9f478f8) |
 | `expected/cc-adapter.json` | expected failures of the AHP adapter (empty) |
@@ -51,7 +51,8 @@ A producer under test is a command:
 - Write AHP artifacts to `ROOT/tasks/TASK/` (the consumer may already have put `consumer.json` there).
   `watch` tells the harness where pending/ and replies/ live while running, if not there.
 - SHOULD append `ROOT/harness/effects.jsonl` lines `{"step": i, "event", "effect"}`: what the host
-  really did (`allow|deny|ask|accept|decline|block|ack|host-default|none`). Without it the harness
+  really did (`allow|deny|ask|accept|decline|block|ack|host-default|none`), plus `"injected": bool` —
+  whether the host actually received `additional_context` (draft.3 scenarios check it). Without it the harness
   falls back to `events.jsonl` outcomes, which cannot catch a host that ignores the producer.
 - Exit 0 after the last step. Gate timeouts in scenarios are short (1.5–3 s) via `producer.timeout_ms`.
 - Static rules in scenarios use the bridge `rules.json` format (+ `tool_kinds`, `required`), the
@@ -78,5 +79,5 @@ A producer under test is a command:
 | G15 | expired acks applied the default (late replies ignored; turn.stop accepted:false) |
 | G16 | consumer timeouts clamped to host−10 s or max_gate_timeout_ms, reported partially_applied |
 | G17 | rules declared with status; required rules applied |
-| E00–E11 | per-scenario expectations: effect, via, ack status, accepted, pending, class, truncated fields, payload fields, policy.deny count, producer.error, capabilities classes |
+| E00–E13 | per-scenario expectations: effect, via, ack status, accepted, pending, class, truncated fields, payload fields, policy.deny count, producer.error, capabilities classes, context injected (E12), capabilities limits (E13). A scenario with `requires_gate` is skipped (E00 skip) when the producer does not offer that event as a gate |
 | P00 | producer exited 0 |

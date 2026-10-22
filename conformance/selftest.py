@@ -19,6 +19,8 @@ MUTATIONS = {
     "bad_sha": ["truncation"],
     "no_rules": ["rules-rm-rf", "required-rule-tool-kind"],
     "crash_open": ["producer-error"],
+    "truncate_context": ["context-limit"],
+    "no_stray_ack": ["context-notify-reply"],
 }
 
 

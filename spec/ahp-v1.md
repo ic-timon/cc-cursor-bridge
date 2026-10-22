@@ -1,7 +1,7 @@
 # Agent Hook Protocol v1（AHP v1，`ahp/1`）
 
-- 状态：**草案 1.0.0-draft.2**（2026-10-22），分支 `feat/ahp-v1-spec`，基线 cc-cursor-bridge `9f478f8`
-- draft.2 变更：吸收 RINO 开发 P0 对表的 8 项共识，见文末「变更记录」
+- 状态：**草案 1.0.0-draft.3**（2026-10-22），分支 `feat/ahp-v1-spec`，基线 cc-cursor-bridge `9f478f8`
+- draft.2 变更：吸收 RINO 开发 P0 对表的 8 项共识；draft.3：注入上下文（§7.3）与逐事件 fail-closed（§9.1），见文末「变更记录」
 - 一致性测试：`python3 -m conformance`（见 `conformance/README.md`）
 - 机器可读部分：`spec/schemas/*.schema.json`（JSON Schema 2020-12）、`spec/examples/`
 - 校验：`python3 spec/tools/validate.py`；旧格式转换：`python3 spec/tools/legacy_to_ahp.py <task-dir>`
@@ -52,7 +52,7 @@ AHP v1 来自 cc-cursor-bridge 在 Claude Code 上的实际用法（33 个 hook�
 2. producer 在任务开始、写出第一个事件**之前** MUST 原子写出 `capabilities.json`（schema：`capabilities.schema.json`），写入后不再修改。它列出：
    - 每个事件的**生效**类（`class`）、允许的类、gate 的 `decisions`、`default_decision`、`timeout_ms`；
    - feature 开关（`acks`、`full_files`、`updated_input`、`additional_context`、`message_delta`、`policy_deny_event`、`consumer_rules`）；
-   - 截断上限、`max_blocks`；宿主 hook 超时 `host_hook_timeout_ms`（有宿主超时时 MUST 给出，进程内 producer 如 RINO 可以不填），以及 producer 自己允许的最长 gate 等待 `max_gate_timeout_ms`（不填宿主超时时 MUST 给出）；
+   - 截断上限、`max_blocks`、注入上下文上限 `max_additional_context_chars`（§7.3）；宿主 hook 超时 `host_hook_timeout_ms`（有宿主超时时 MUST 给出，进程内 producer 如 RINO 可以不填），以及 producer 自己允许的最长 gate 等待 `max_gate_timeout_ms`（不填宿主超时时 MUST 给出）；
    - 静态规则的 id 列表、规则文件的 sha256、每条规则的 `status`（`applied | partially_applied | unapplied`）和 `required` 列表（§11）；
    - `consumer_json`：`absent | applied | partially_applied | rejected`，以及 `consumer_notes` 说明没采纳的项。
 3. producer 对 `consumer.json` 的处理：
@@ -247,7 +247,7 @@ producer 创建任务目录时 SHOULD 用 `0700`，文件 `0600`。
 | `decision` | MUST。统一取值 `allow / deny / ask / block / accept / decline / ack`，且 MUST 在该 envelope 的 `decisions` 内 |
 | `reason` | 给运行时（和人）看的理由。`decision = block` 时 MUST 非空——它就是让智能体继续做的指示 |
 | `updated_input` | `tool.pre` / `permission.request` 且 `allow` 时可改写工具输入。producer 不支持时（`features.updated_input = false`）MUST 视为 invalid。改写后 producer MUST 先对新输入**重跑静态规则**（命中 → deny，ack `via: rule`，发 `policy.deny`），再走剩余的 gate（例如 RINO 的 ApprovalGate），并在 `events.jsonl` 的 outcome 里记下实际执行的是改写后的输入。reply 不能改工具名：任何试图改 `tool_name` 的 reply（包括 `updated_input` 里带 `tool_name`）MUST 视为 invalid |
-| `additional_context` | 注入给智能体的额外上下文 |
+| `additional_context` | 注入给智能体的额外上下文。只在 gate 的 reply 里、且只在 §7.2 列出它的事件上有效；长度上限 `limits.max_additional_context_chars`，见 §7.3 |
 | `content` | `input.request` 且 `accept` 时的答案对象 |
 | `watch_paths`、`worktree_path`、`display_content` | 对应事件的专用字段 |
 | `protocol`、`seq` | SHOULD。若给出 `seq` 且与文件名不符，MUST 视为 invalid |
@@ -268,6 +268,15 @@ producer 创建任务目录时 SHOULD 用 `0700`，文件 `0600`。
 | `worktree.create` | ack | worktree_path |
 
 `ask` 的含义是「交还给运行时自己的交互式确认」。无头运行时（`-p`、沙箱）里 `ask` 等于拒绝，producer SHOULD 在 `capabilities.json` 里对无头模式去掉 `ask`。
+
+reply 带了该事件「可带字段」以外的字段（例如 `turn.stop` 带 `additional_context`）MUST 视为 invalid。
+
+### 7.3 注入上下文（`additional_context`）
+
+1. **只认 gate 的 reply。** producer MUST 只从 gate 事件的合法 reply 里取 `additional_context` 并注入。notify / log 事件不等待回复；consumer 若仍为它写了 `replies/<seq>.json`（例如想在 notify 类的 `session.start` 上注入），producer MUST NOT 注入，并 MUST 在它处理下一个事件之前、或任务结束时（以先到者为准）为该 seq 写 `acks/<seq>.json`：`status: invalid`、`via: invalid_reply`、`applied_decision: ack`、`errors` 说明「不是 gate」。producer 已退出后才出现的这种 reply 没有 ack，consumer MUST 认为它没有生效。想注入就把事件升为 gate（`consumer.json.event_classes`）。
+2. **长度上限，不截断。** `capabilities.json` 的 `limits.max_additional_context_chars` 给出单条 `additional_context` 的上限（Unicode 码点，缺省 10000）。超出 MUST 视为 invalid reply（ack `status: invalid`，采用 `default_decision`），MUST NOT 截断后再注入——被截的上下文会让智能体以为自己拿到了全部。宿主有自己的上限、且计数方式不同时，producer MUST 把声明值取得足够小，使任何被接受的字符串都能原样到达智能体（CC 见附录 A.2）。consumer 有更多内容时 SHOULD 自己拆分或改为让智能体按需读取文件。
+3. **ack 在注入之前写出**（§9.4 的特例）：producer MUST 先写 `acks/<seq>.json`（`status: consumed`），再把上下文交给运行时。注入失败时不改写 ack，SHOULD 发 `producer.error`。
+4. **持久化（说明性）。** 注入的上下文 SHOULD 作为可回放的会话消息保存（例如 CC 把它作为 system reminder 插在 hook 触发处的对话里；RINO 的 `Plugin{form=hook}` 设计同样写成会话消息），而不是改写系统提示。这样恢复会话、重放转录时智能体看到的内容一致，审计时也能在转录里找到它。
 
 ## 8. 截断对象
 
@@ -299,6 +308,19 @@ producer 创建任务目录时 SHOULD 用 `0700`，文件 `0600`。
 - 到达 deadline。
 
 producer MUST NOT 因为自身失败而让宿主走「无答复」路径，只要那条路径可能放行。对每次 fail-closed，producer MUST 写 `acks/<seq>.json`（`via: error|timeout|invalid_reply`），SHOULD 发一条 `producer.error` notify。
+
+逐事件的含义（出错、超时、reply 无效三种情形相同，ack 的 `status` 分别是 `expired`（`via: error|timeout`）和 `invalid`）：
+
+| gate | 默认决定 | 宿主上的效果 |
+| --- | --- | --- |
+| `tool.pre`、`permission.request`、`model.switch.pre` | deny | 工具 / 切换不执行 |
+| `input.request` | decline | 拒绝回答提问 |
+| `turn.stop` | ack | 结束本轮，`accepted: false`（§9.3） |
+| `session.start` | ack | 会话照常开始，**不注入**任何 `additional_context`、`watch_paths` |
+| `prompt.submit`、`prompt.expand`、`task.create` | block | 不开启这一轮（提示不交给智能体）；`reason` 说明原因，producer SHOULD 把它带进最终结果（CC 把 block 的 reason 显示给用户；无头模式下进入结果行） |
+| 其他升为 gate、默认 `ack` 的事件 | ack | 不采纳 reply 的任何字段（不注入、不改路径） |
+
+默认是 `ack` 的 gate 并不违反上面的「拒绝方向」：它们出错时的安全方向是「consumer 的回复不产生任何效果」，producer MUST NOT 用到任何来自无效或缺失 reply 的字段。
 
 ### 9.2 超时默认值
 
@@ -339,7 +361,8 @@ producer 对每个 gate MUST 写且只写一个 `acks/<seq>.json`（`ack.schema.
 | `invalid` | deadline 前读到的 reply 不合法 | `default_decision`；`errors` 列出原因 |
 | `expired` | deadline 前没有合法 reply（包括没有 reply、或 reply 在 deadline 后才出现） | `default_decision` |
 
-- ack 在决定**执行之前**写出（崩溃时 consumer 至少知道 producer 打算做什么）。
+- ack 在决定**执行之前**写出（崩溃时 consumer 至少知道 producer 打算做什么）；带 `additional_context` 的 reply 也一样，先写 ack 再注入（§7.3）。
+- 非 gate 事件不写 ack，唯一例外是 §7.3 第 1 条：consumer 对非 gate 事件写了 reply 时的 `invalid` ack。
 - deadline 之后才出现的 reply：producer 若仍在运行，SHOULD 检查一次，但 ack 已经是 `expired`，MUST NOT 改写。consumer 写 reply 后 SHOULD 读 ack 确认结果，看到 `expired` 时 MUST 认为自己的回答没有生效。
 - `reply_sha256` 记录被执行的 reply 文件字节的 SHA-256。
 - producer 自身出错（§9.1）时 ack 写 `status: expired`、`via: error`。
@@ -439,6 +462,10 @@ hook 同步/异步配置在 `claude/hooks/hooks.json`：四个 gate（PreToolUse
 | `worktree.create` | stdout 只有 worktree 绝对路径一行 |
 | 其他 block 类 | 顶层 `{"decision":"block","reason":…}`，`additional_context` → `hookSpecificOutput.additionalContext` |
 
+`additionalContext` 的宿主上限：CC 文档写明每个 hook 的每个 `additionalContext` 字符串上限 10,000 字符（不可配置）；超出时 CC 把全文存到会话目录的文件里，只注入文件路径和前 2,000 字符的预览，且不提示智能体去读——等于静默截断。CC 适配层因此声明 `limits.max_additional_context_chars = 10000`（配置只能调小），按 UTF-16 码元计数（与 CC 的 JavaScript 字符串长度一致，码点数不会更大），超出即 invalid。
+
+`prompt.submit` 在 CC 上：UserPromptSubmit 在 `hooks.json` 里是异步的，所以 CC 适配层不提供它作为 gate（`allowed_classes` 里没有 `gate`），§9.1 表里的 `prompt.submit` 一行在 CC 上不适用；要支持，需把该 hook 改为同步。
+
 ### A.3 退出码（按 CC 文档，**未在 2.1.306 上逐一复测**）
 
 - `0`：读 stdout JSON。
@@ -530,6 +557,8 @@ RINO 侧的分阶段声明（供 consumer 参考，不是规范要求）：第�
 2. 沙箱传输（§14）随 Cube/E2B 搁置。
 
 ## 变更记录
+
+- **1.0.0-draft.3**（2026-10-22）：§7.3 注入上下文——只认 gate reply，对非 gate 的 reply 写 `invalid` ack；`limits.max_additional_context_chars`（缺省 10000，超出为 invalid、不截断）；ack 先于注入；持久化为会话消息（说明性）。§7.2 reply 带不属于该事件的字段为 invalid。§9.1 逐事件 fail-closed 表（`session.start` 不注入、`prompt.submit` block）。附录 A.2 记下 CC 的 10,000 字符上限。schema：`capabilities.limits` 加 `max_additional_context_chars`。一致性测试新增 4 个场景（`context-notify-reply`、`context-limit`、`session-start-failclosed`、`prompt-submit-failclosed`）。
 
 - **1.0.0-draft.2**（2026-10-22）：附录 B 的 8 项共识；ack 在 producer 出错与规则拒绝时的写法（§9.4）；§14 标注搁置；schema：新增 `events/plan.update`，`tool.pre` 加 `tool_kind`/`command`，`message.delta` 加 `kind`，`capabilities.rules` 加 `status`/`required`，`limits` 加 `max_gate_timeout_ms`，`consumer.extra_rules` 加 `tool_kinds`/`required`；新增一致性测试套件 `conformance/`。
 - **1.0.0-draft.1**（2026-10-22）：初稿。
