@@ -26,7 +26,8 @@ AHP v1 来自 cc-cursor-bridge 在 Claude Code 上的实际用法（33 个 hook�
 
 2.1 协议标识是 `ahp/<major>`。本文定义 `ahp/1`。每个 envelope、reply（SHOULD）、ack、`capabilities.json`、`consumer.json` 都带 `protocol` 字段。
 
-2.2 `capabilities.json` 里的 `spec_version` 是 `1.<minor>.<patch>`：
+2.2 `capabilities.json` 里的 `spec_version` 是 `1.<minor>.<patch>`，草案期可带预发布后缀 `-draft.<N>`（语义化版本的 pre-release，完整形式 `^1\.\d+\.\d+(-draft\.[1-9]\d*)?$`）。草案期 producer SHOULD 写出它实现的确切草案（例如 `1.0.0-draft.3`）。consumer 判断兼容时 MUST 忽略预发布后缀、只按下面的 major/minor/patch 规则比较；后缀与自己依据的草案不同时 MAY 发出警告，但 MUST NOT 仅因此拒绝任务。`consumer.json` MAY 带同格式的 `spec_version`，说明 consumer 依据的版本，仅供参考。
+
 
 - **patch**：只改文字、示例、schema 的描述。不改变任何合法实例的合法性。
 - **minor**：只做加法——新的可选字段、新的 notify/log 事件、新的可选 feature 开关、新的 `x-` 扩展。旧 consumer MUST 能继续工作。
@@ -558,6 +559,7 @@ RINO 侧的分阶段声明（供 consumer 参考，不是规范要求）：第�
 
 ## 变更记录
 
+- **1.0.0-draft.3 补充**（2026-10-22，RINO）：§2.2 `spec_version` 接受 `-draft.<N>` 预发布后缀，producer SHOULD 写确切草案，consumer 比较时忽略后缀、MAY 警告；schema：`common.$defs.spec_version`，`capabilities`、`consumer`（新增可选）引用它；示例改为 `1.0.0-draft.3`；一致性检查 G18。
 - **1.0.0-draft.3**（2026-10-22）：§7.3 注入上下文——只认 gate reply，对非 gate 的 reply 写 `invalid` ack；`limits.max_additional_context_chars`（缺省 10000，超出为 invalid、不截断）；ack 先于注入；持久化为会话消息（说明性）。§7.2 reply 带不属于该事件的字段为 invalid。§9.1 逐事件 fail-closed 表（`session.start` 不注入、`prompt.submit` block）。附录 A.2 记下 CC 的 10,000 字符上限。schema：`capabilities.limits` 加 `max_additional_context_chars`。一致性测试新增 4 个场景（`context-notify-reply`、`context-limit`、`session-start-failclosed`、`prompt-submit-failclosed`）。
 
 - **1.0.0-draft.2**（2026-10-22）：附录 B 的 8 项共识；ack 在 producer 出错与规则拒绝时的写法（§9.4）；§14 标注搁置；schema：新增 `events/plan.update`，`tool.pre` 加 `tool_kind`/`command`，`message.delta` 加 `kind`，`capabilities.rules` 加 `status`/`required`，`limits` 加 `max_gate_timeout_ms`，`consumer.extra_rules` 加 `tool_kinds`/`required`；新增一致性测试套件 `conformance/`。

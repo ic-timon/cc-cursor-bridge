@@ -1,5 +1,6 @@
 {
   "protocol": "ahp/1",
+  "spec_version": "1.0.0-draft.3",
   "accept_protocols": [
     "ahp/1"
   ],

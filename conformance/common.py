@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import re
 import os
 import sys
 import uuid
@@ -22,6 +23,14 @@ AHP_TO_CC = {ahp: cc for cc, (ahp, _, _) in CC_TO_AHP.items()}
 EXTRA_EVENTS = {"policy.deny": ("notify", ("notify",)), "producer.error": ("notify", ("notify",)),
                 **{k: (v[0], v[1]) for k, v in SYNTHESIZED.items()}}
 CLOSED = {"deny", "decline", "block"}
+SPEC_VERSION = "1.0.0-draft.3"  # the draft this suite checks (spec 2.2)
+SPEC_VERSION_RE = re.compile(r"^1\.(\d+)\.(\d+)(?:-draft\.([1-9]\d*))?$")
+
+
+def version_core(version: str):
+    """(minor, patch, draft or None); None if malformed. Compatibility ignores the draft (spec 2.2)."""
+    m = SPEC_VERSION_RE.match(version or "") if isinstance(version, str) else None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)) if m.group(3) else None) if m else None
 
 
 def default_class(event: str) -> str:

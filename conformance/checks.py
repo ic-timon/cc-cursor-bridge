@@ -394,6 +394,22 @@ def g_rules_declared(v: TaskView, val: Validators, ctx: dict) -> Result:
     return _fail(bad)
 
 
+def g_spec_version(v: TaskView, val: Validators, ctx: dict) -> Result:
+    """Spec 2.2: well-formed, same 1.x line (pre-release ignored); a different draft is only a note."""
+    from .common import SPEC_VERSION, version_core
+    if not isinstance(v.caps, dict):
+        return "skip", "no capabilities.json"
+    got = v.caps.get("spec_version")
+    core, want = version_core(got), version_core(SPEC_VERSION)
+    if core is None:
+        return "fail", f"spec_version {got!r} is not 1.<minor>.<patch>(-draft.<N>)?"
+    if core[:2] > want[:2]:
+        return "pass", f"note: producer {got} is newer than suite {SPEC_VERSION}"
+    if core[2] != want[2]:
+        return "pass", f"note: producer declares {got}, suite checks {SPEC_VERSION} (draft mismatch, compatible)"
+    return "pass", ""
+
+
 GENERIC: List[Tuple[str, str, Callable[[TaskView, Validators, dict], Result]]] = [
     ("G01", "capabilities.json present and valid", g_capabilities),
     ("G02", "pending/push envelopes valid", g_envelopes),
@@ -412,6 +428,7 @@ GENERIC: List[Tuple[str, str, Callable[[TaskView, Validators, dict], Result]]] =
     ("G15", "expired acks applied the default", g_late_reply_ignored),
     ("G16", "consumer timeouts clamped and reported", g_timeout_clamp),
     ("G17", "rules declared with status; required rules applied", g_rules_declared),
+    ("G18", "spec_version well-formed and compatible", g_spec_version),
 ]
 
 

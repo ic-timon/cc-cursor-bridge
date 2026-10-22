@@ -1,6 +1,6 @@
 {
   "protocol": "ahp/1",
-  "spec_version": "1.0.0",
+  "spec_version": "1.0.0-draft.3",
   "task_id": "demo-bridge-snapshot",
   "producer": {
     "name": "cc-cursor-bridge",
