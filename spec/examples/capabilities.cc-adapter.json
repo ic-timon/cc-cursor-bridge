@@ -129,18 +129,11 @@
       "class": "notify",
       "allowed_classes": [
         "notify",
-        "log",
-        "gate"
+        "log"
       ],
       "native": [
         "UserPromptSubmit"
-      ],
-      "decisions": [
-        "ack",
-        "block"
-      ],
-      "default_decision": "block",
-      "timeout_ms": 120000
+      ]
     },
     "prompt.expand": {
       "class": "notify",
