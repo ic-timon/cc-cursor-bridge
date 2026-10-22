@@ -1,0 +1,109 @@
+{
+  "description": "CC adapter (reference) vs RINO's local execution backend (candidate), RINO P2 first cut as planned in RINO's P0 mapping and spec Appendix B. Draft: tighten as RINO declares more. Every entry says why the difference is intended; anything not listed fails the diff.",
+  "include": [
+    "cc-known.json"
+  ],
+  "ignore_events": [
+    "message.delta"
+  ],
+  "allow": [
+    {
+      "id": "rino-p2-one-permission-layer",
+      "code": "D12",
+      "path": "capabilities.events.*.present",
+      "event": [
+        "permission.request",
+        "input.request"
+      ],
+      "ref": true,
+      "cand": "<absent>",
+      "reason": "RINO P2 v1 declares only tool.pre and turn.stop as gates; permission.request / input.request come after interrupt->resume is wired (spec Appendix B, staged declaration). Spec 4.2: MUST NOT list them until then."
+    },
+    {
+      "id": "rino-p2-no-permission-request-event",
+      "code": "D01",
+      "event": [
+        "permission.request",
+        "input.request"
+      ],
+      "reason": "Same staging: in headless cli, RINO's ApprovalGate Ask is a deny and the tool.pre gate is the only consumer decision point. Remove this entry when RINO declares the gates."
+    },
+    {
+      "id": "rino-undeclared-events",
+      "code": "D12",
+      "path": "capabilities.events.*.present",
+      "event": [
+        "subagent.start",
+        "subagent.stop",
+        "worktree.create",
+        "worktree.remove",
+        "session.setup",
+        "instructions.load",
+        "prompt.expand",
+        "agent.notification",
+        "task.create",
+        "task.complete",
+        "teammate.idle",
+        "config.change",
+        "cwd.change",
+        "directory.add",
+        "file.change",
+        "compact.pre",
+        "compact.post",
+        "model.switch.pre",
+        "model.switch.post",
+        "input.result"
+      ],
+      "ref": true,
+      "cand": "<absent>",
+      "reason": "RINO has no subagents, worktrees, teammates, slash expansion, mid-run model switch or CC-style config/file hooks (P0 mapping 1, 1.1). Spec 4.1: undeclared events are not emitted."
+    },
+    {
+      "id": "rino-max-gate-timeout",
+      "code": "D12",
+      "path": "capabilities.limits.max_gate_timeout_ms",
+      "ref": 170000,
+      "reason": "In-process producer: no host hook timeout, so its own ceiling (RINO plans 600000) applies instead of CC's 180s-10s (spec 9.2)."
+    },
+    {
+      "id": "rino-p2-no-updated-input",
+      "code": "D12",
+      "path": "capabilities.features.updated_input",
+      "ref": true,
+      "cand": false,
+      "reason": "RINO P2 first cut declares updated_input=false until its rule engine re-runs rules on rewritten input (P0 mapping Q5)."
+    },
+    {
+      "id": "rino-p2-no-additional-context",
+      "code": "D12",
+      "path": "capabilities.features.additional_context",
+      "ref": true,
+      "cand": false,
+      "reason": "additional_context needs the adk TurnPreparer seam (decision-adk-fragment-seam, phase 3)."
+    },
+    {
+      "id": "rino-turn-stop-longer-timeout",
+      "codes": [
+        "D10",
+        "D12"
+      ],
+      "path": "*turn.stop*timeout_ms",
+      "ref": 170000,
+      "reason": "consumer.json may ask turn.stop for up to 300000; CC clamps to 170000, RINO can honour it (spec 9.2)."
+    },
+    {
+      "id": "rino-consumer-json-not-clamped",
+      "code": "D12",
+      "path": "capabilities.consumer_json",
+      "ref": "partially_applied",
+      "cand": "applied",
+      "reason": "CC reports partially_applied when it clamps turn.stop or cannot gate an async hook; RINO may apply the same consumer.json fully."
+    },
+    {
+      "id": "rino-rules-file",
+      "code": "D12",
+      "path": "capabilities.rules.sha256",
+      "reason": "RINO ships its own rules file in the same schema (tool_kinds instead of CC tool names), so the digest differs (P0 mapping Q9). Rule ids, status and required are still compared."
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "description": "Known, intended differences of the Claude Code adapter (reference) that any candidate may legitimately not share. Included by cc-vs-*.json.",
+  "allow": [
+    {
+      "id": "cc-async-not-gate",
+      "code": "D12",
+      "path": "capabilities.events.*.allowed_classes",
+      "event": ["prompt.submit", "prompt.expand", "tool.post", "tool.error", "subagent.stop", "task.create",
+                "task.complete", "teammate.idle", "compact.pre", "model.switch.pre"],
+      "ref": ["log", "notify"],
+      "reason": "These CC hooks are async in claude/hooks/hooks.json, so the CC adapter does not offer them as gates (spec A.1, A.2). A candidate that can gate them is not a regression."
+    },
+    {
+      "id": "cc-no-reasoning-delta",
+      "code": "D12",
+      "path": "capabilities.features.reasoning_delta",
+      "ref": false,
+      "reason": "CC hooks expose no reasoning text, so the adapter pins reasoning_delta=false (spec A.2)."
+    },
+    {
+      "id": "cc-host-hook-timeout",
+      "code": "D12",
+      "path": "capabilities.limits.host_hook_timeout_ms",
+      "ref": 180000,
+      "cand": "<absent>",
+      "reason": "In-process producers have no host hook timeout and declare max_gate_timeout_ms instead (spec 3.3, 9.2)."
+    }
+  ]
+}

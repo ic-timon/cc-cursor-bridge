@@ -22,6 +22,8 @@ config/bridge.json                  notifier 与等待通道，默认都关
 cursor/skills/claude-code-bridge/   Cursor skill 的唯一副本
 cursor/hooks.json                   空的 Cursor hooks，避免误读 CC 的 hooks
 docs/USAGE.md                       给使用者和 agent 的简短说明
+docs/shadow-diff.md                 AHP shadow diff：CC 适配层与候选 producer 逐事件对比
+tools/shadow_diff/                  shadow diff 工具（python3 -m tools.shadow_diff），不属于插件
 examples/sandbox/                   claude --plugin-dir 自测目录，产物不入库
 ```
 
