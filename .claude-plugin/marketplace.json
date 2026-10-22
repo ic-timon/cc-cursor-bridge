@@ -1,0 +1,14 @@
+{
+  "name": "cc-cursor-bridge",
+  "description": "Marketplace for the cc-cursor-bridge Claude Code plugin",
+  "owner": {
+    "name": "ic-timon"
+  },
+  "plugins": [
+    {
+      "name": "cc-cursor-bridge",
+      "source": ".",
+      "description": "Hook bridge that logs Claude Code events and blocks dangerous tool calls for a Cursor agent."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Self-test workspace. The README stays; runtime files do not.
+examples/sandbox/*
+!examples/sandbox/README.md
+
+# Full claude -p harness output. tests/hooks/report.md is the hand-written summary.
+tests/hooks/out/
+
+# Local bridge state if a run is pointed at the repo instead of ~/.cc-bridge.
+.cc-bridge/

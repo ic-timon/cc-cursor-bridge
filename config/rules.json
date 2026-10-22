@@ -1,0 +1,56 @@
+{
+  "rules": [
+    {
+      "id": "bash-rm-rf",
+      "enabled": true,
+      "tools": ["Bash", "PowerShell"],
+      "reason": "拦截递归强制删除（rm -rf，或 PowerShell 的 Remove-Item -Recurse -Force）",
+      "bash_rm_rf": true,
+      "powershell_remove_recurse_force": true
+    },
+    {
+      "id": "bash-git-push-force",
+      "enabled": true,
+      "tools": ["Bash", "PowerShell"],
+      "reason": "拦截 git push --force / -f / --force-with-lease",
+      "git_push_force": true,
+      "include_force_with_lease": true
+    },
+    {
+      "id": "secret-env-file",
+      "enabled": true,
+      "tools": [
+        "Bash",
+        "PowerShell",
+        "Read",
+        "Edit",
+        "Write",
+        "MultiEdit",
+        "NotebookEdit",
+        "Glob",
+        "Grep"
+      ],
+      "reason": "拦截读写 .env（放行 .env.example、.env.sample、.env.template）",
+      "env_files": {
+        "allow_basenames": [".env.example", ".env.sample", ".env.template"]
+      }
+    },
+    {
+      "id": "ssh-dir",
+      "enabled": true,
+      "tools": [
+        "Bash",
+        "PowerShell",
+        "Read",
+        "Edit",
+        "Write",
+        "MultiEdit",
+        "NotebookEdit",
+        "Glob",
+        "Grep"
+      ],
+      "reason": "拦截访问 ~/.ssh",
+      "home_ssh": true
+    }
+  ]
+}
