@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ahp.invalid/schemas/1/consumer.schema.json",
+  "title": "AHP v1 consumer.json (consumer, optional, written before the producer starts)",
+  "type": "object",
+  "required": [
+    "protocol",
+    "consumer"
+  ],
+  "properties": {
+    "protocol": {
+      "$ref": "common.schema.json#/$defs/protocol"
+    },
+    "accept_protocols": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^ahp/\\d+$"
+      }
+    },
+    "consumer": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "event_classes": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "common.schema.json#/$defs/event_name"
+      },
+      "additionalProperties": {
+        "$ref": "common.schema.json#/$defs/event_class"
+      }
+    },
+    "timeouts_ms": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "common.schema.json#/$defs/event_name"
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1000
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "boolean"
+      }
+    },
+    "extra_rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id"
+        ]
+      },
+      "description": "Additional deny-only rules. Producers MUST NOT let these relax any built-in rule."
+    },
+    "created_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    }
+  },
+  "patternProperties": {
+    "^x-": {}
+  },
+  "additionalProperties": false
+}

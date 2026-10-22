@@ -1,0 +1,10 @@
+{
+  "protocol": "ahp/1",
+  "seq": 9,
+  "decision": "allow",
+  "reason": "ok, but run tests quietly",
+  "updated_input": {
+    "command": "python3 -m unittest -q test_calc"
+  },
+  "additional_context": "Tests must pass before you stop."
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ahp.invalid/schemas/1/events/session.start.schema.json",
+  "title": "session.start payload",
+  "type": "object",
+  "required": [
+    "source"
+  ],
+  "properties": {
+    "source": {
+      "enum": [
+        "startup",
+        "resume",
+        "clear",
+        "compact",
+        "other"
+      ]
+    },
+    "model": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}

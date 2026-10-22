@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ahp.invalid/schemas/1/reply.schema.json",
+  "title": "AHP v1 reply (consumer -> producer), replies/<seq>.json",
+  "type": "object",
+  "required": [
+    "decision"
+  ],
+  "properties": {
+    "protocol": {
+      "$ref": "common.schema.json#/$defs/protocol"
+    },
+    "seq": {
+      "$ref": "common.schema.json#/$defs/seq"
+    },
+    "decision": {
+      "$ref": "common.schema.json#/$defs/decision"
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 8000
+    },
+    "updated_input": {
+      "type": "object"
+    },
+    "additional_context": {
+      "type": "string",
+      "maxLength": 32000
+    },
+    "content": {
+      "type": "object",
+      "description": "input.request: the answer when decision=accept."
+    },
+    "watch_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "worktree_path": {
+      "type": "string"
+    },
+    "display_content": {
+      "type": "string"
+    },
+    "consumer": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "ts": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    }
+  },
+  "patternProperties": {
+    "^x-": {}
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "block"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "minLength": 1
+          }
+        }
+      }
+    }
+  ]
+}

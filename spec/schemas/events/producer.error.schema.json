@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ahp.invalid/schemas/1/events/producer.error.schema.json",
+  "title": "producer.error payload",
+  "type": "object",
+  "required": [
+    "stage",
+    "message"
+  ],
+  "properties": {
+    "stage": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "target_seq": {
+      "$ref": "../common.schema.json#/$defs/seq"
+    },
+    "applied_decision": {
+      "$ref": "../common.schema.json#/$defs/decision"
+    }
+  },
+  "additionalProperties": true,
+  "description": "Producer-internal failure; for gate events the default (fail-closed) decision was applied."
+}

@@ -1,0 +1,6 @@
+{
+  "protocol": "ahp/1",
+  "seq": 18,
+  "decision": "ack",
+  "reason": "4 tests pass, accepted"
+}

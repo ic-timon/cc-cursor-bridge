@@ -1,0 +1,33 @@
+{
+  "protocol": "ahp/1",
+  "task_id": "demo-bridge-snapshot",
+  "seq": 17,
+  "event": "message.delta",
+  "class": "notify",
+  "producer": {
+    "name": "cc-cursor-bridge",
+    "version": "ahp-adapter-draft",
+    "host": {
+      "name": "claude-code",
+      "version": "2.1.306"
+    }
+  },
+  "ts": "2026-10-22T01:27:35.216+08:00",
+  "payload": {
+    "message_id": "ba70df8d-deb7-4aea-ba43-537bdf206701",
+    "turn_id": "50a1da9a-89e7-401d-94c4-7efdb9bff67d",
+    "index": 0,
+    "final": true,
+    "text": "`calc.py` 中实现了 `add(a, b)`，`test_calc.py` 用 `unittest` 覆盖了正整数、负数、浮点数和零值共 4 个用例。运行 `python3 -m unittest -v test_calc` 后 4 个用例全部通过（OK）。"
+  },
+  "context": {
+    "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+    "cwd": "/private/tmp/ccb-demo2-woqt",
+    "transcript_path": "/Users/timon/.claude/projects/-private-tmp-ccb-demo2-woqt/c3233cdc-54f0-49fc-be19-21f5b86a66fd.jsonl",
+    "prompt_id": "ae7e0386-efda-495b-b65e-70f711d9946c",
+    "permission_mode": "acceptEdits"
+  },
+  "native": {
+    "event": "MessageDisplay"
+  }
+}

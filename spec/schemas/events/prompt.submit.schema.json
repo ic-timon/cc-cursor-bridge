@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ahp.invalid/schemas/1/events/prompt.submit.schema.json",
+  "title": "prompt.submit payload",
+  "type": "object",
+  "required": [
+    "prompt"
+  ],
+  "properties": {
+    "prompt": {
+      "$ref": "../common.schema.json#/$defs/text"
+    }
+  },
+  "additionalProperties": true
+}

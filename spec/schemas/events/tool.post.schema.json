@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ahp.invalid/schemas/1/events/tool.post.schema.json",
+  "title": "tool.post payload",
+  "type": "object",
+  "required": [
+    "tool_name",
+    "tool_input"
+  ],
+  "properties": {
+    "tool_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool_use_id": {
+      "type": "string"
+    },
+    "tool_input": {
+      "$ref": "../common.schema.json#/$defs/tool_input"
+    },
+    "mcp_server": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tool_response": {
+      "$ref": "../common.schema.json#/$defs/json_or_text"
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": true
+}
