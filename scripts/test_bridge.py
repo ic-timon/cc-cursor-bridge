@@ -1422,5 +1422,132 @@ class AhpProducerTest(unittest.TestCase):
         self.assertEqual(self.pushed("turn.stop")[0]["context"]["transcript_path"], long_path)
 
 
+    # ---- wrap-up: A.6 #12 legacy full_file, narrow wait in the AHP tree, reasoning_delta
+
+    def test_legacy_truncated_objects_name_full_file(self):
+        env = dict(self.environ)
+        env.pop("CC_BRIDGE_WAIT_ALL")
+        env["CC_BRIDGE_EVENT_MODE_PostToolUse"] = "push"
+        bridge.handle_event(self.event("PostToolUse", tool_name="Bash", tool_use_id="toolu_p",
+                                       tool_input={"command": "echo " + "x" * 5000},
+                                       tool_response="y" * 3000), env)
+        push = [f for f in (self.legacy / "push").glob("*-PostToolUse.json")]
+        self.assertEqual(len(push), 1)
+        notice = json.loads(push[0].read_text(encoding="utf-8"))
+        full_file = notice["full_file"]
+        self.assertTrue((self.legacy / full_file).is_file())
+        cmd, resp = notice["tool_input"]["command"], notice["tool_response"]
+        for obj in (cmd, resp):
+            self.assertTrue(obj["truncated"])
+            self.assertEqual(obj["full_file"], full_file)
+            self.assertIn("text", obj)  # old readers keep working
+        full = json.loads((self.legacy / full_file).read_text(encoding="utf-8"))
+        self.assertEqual(full["tool_input"]["command"], "echo " + "x" * 5000)
+
+    def narrow_env(self, **extra):
+        env = dict(self.environ)
+        env.pop("CC_BRIDGE_WAIT_ALL")
+        env.pop("CC_BRIDGE_WAIT_ALL_TIMEOUT")
+        env.update({"CC_BRIDGE_EVENT_MODE_PermissionRequest": "log", "CC_BRIDGE_EVENT_MODE_PreToolUse": "log",
+                    "CC_BRIDGE_WAIT": "1", "CC_BRIDGE_WAIT_TIMEOUT": "3"})
+        env.update(extra)
+        return env
+
+    def perm_event(self):
+        return self.event("PermissionRequest", tool_name="Bash", tool_use_id="toolu_narrow",
+                          tool_input={"command": "echo hi"})
+
+    def test_narrow_wait_writes_ahp_gate_and_ack(self):
+        env = self.narrow_env()
+        import time
+
+        def reply():
+            for _ in range(100):
+                if (self.legacy / "pending" / "toolu_narrow.json").is_file():
+                    (self.legacy / "replies").mkdir(parents=True, exist_ok=True)
+                    (self.legacy / "replies" / "toolu_narrow.json").write_text(
+                        json.dumps({"decision": "allow", "reason": "ok"}), encoding="utf-8")
+                    return
+                time.sleep(0.03)
+
+        t = threading.Thread(target=reply)
+        t.start()
+        result = bridge.handle_event(self.perm_event(), env)
+        t.join(3)
+        self.assertIn('"allow"', result.stdout)
+        # legacy: only the old narrow file, no <seq>-<Hook>.json
+        self.assertEqual(sorted(f.name for f in (self.legacy / "pending").glob("*.json")), ["toolu_narrow.json"])
+        line = [json.loads(x) for x in (self.legacy / "events.jsonl").read_text().splitlines()][-1]
+        self.assertEqual((line["channel"], line["pending_id"], line["summary"]["wait"]), ("log", "toolu_narrow", "reply"))
+        # AHP: capabilities declare the gate, pending + consumed ack exist
+        caps = json.loads((self.ahp / "capabilities.json").read_text())
+        self.assertEqual(caps["events"]["permission.request"]["class"], "gate")
+        self.assertEqual(caps["events"]["tool.pre"]["class"], "log")  # on_pre_tool_use is off
+        pend = list((self.ahp / "pending").glob("*-permission.request.json"))
+        self.assertEqual(len(pend), 1)
+        env_json = json.loads(pend[0].read_text())
+        self.assertEqual((env_json["class"], env_json["default_decision"]), ("gate", "deny"))
+        seq = env_json["seq"]
+        ack = json.loads((self.ahp / "acks" / f"{seq}.json").read_text())
+        self.assertEqual((ack["status"], ack["applied_decision"]), ("consumed", "allow"))
+
+    def test_narrow_wait_ahp_reply_timeout_and_invalid(self):
+        env = self.narrow_env(CC_BRIDGE_WAIT_PRE_TOOL="1", CC_BRIDGE_WAIT_TIMEOUT="0.3")
+        result = bridge.handle_event(self.event(), env)  # PreToolUse, nobody answers
+        self.assertIn('"deny"', result.stdout)
+        acks = sorted((self.ahp / "acks").glob("*.json"), key=lambda f: int(f.stem))
+        ack = json.loads(acks[-1].read_text())
+        self.assertEqual((ack["status"], ack["applied_decision"]), ("expired", "deny"))
+        # an AHP reply answers the same gate; an invalid one is denied at once
+        env["CC_BRIDGE_WAIT_TIMEOUT"] = "3"
+        import time
+
+        def answer_next(body):
+            seen = {f.name for f in (self.ahp / "pending").glob("*.json")}
+
+            def run():
+                for _ in range(100):
+                    new = [f for f in (self.ahp / "pending").glob("*-tool.pre.json") if f.name not in seen]
+                    if new:
+                        seq = new[0].name.split("-", 1)[0]
+                        (self.ahp / "replies" / f"{seq}.json").write_text(json.dumps(body), encoding="utf-8")
+                        return
+                    time.sleep(0.03)
+            t = threading.Thread(target=run)
+            t.start()
+            return t
+
+        t = answer_next({"decision": "maybe"})
+        result = bridge.handle_event(self.event(), env)
+        t.join(3)
+        self.assertIn('"deny"', result.stdout)
+        acks = sorted((self.ahp / "acks").glob("*.json"), key=lambda f: int(f.stem))
+        self.assertEqual(json.loads(acks[-1].read_text())["status"], "invalid")
+        t = answer_next({"decision": "allow"})
+        result = bridge.handle_event(self.event(), env)
+        t.join(3)
+        self.assertIn('"allow"', result.stdout)
+
+    def test_narrow_wait_without_ahp_tree_unchanged(self):
+        env = self.narrow_env(CC_BRIDGE_AHP="0", CC_BRIDGE_WAIT_TIMEOUT="0.2")
+        result = bridge.handle_event(self.perm_event(), env)
+        self.assertIn('"deny"', result.stdout)
+        self.assertTrue((self.legacy / "pending" / "toolu_narrow.json").is_file())
+        self.assertFalse(self.ahp.exists())
+
+    def test_reasoning_delta_request_is_partial(self):
+        self.ahp.mkdir(parents=True)
+        (self.ahp / "consumer.json").write_text(json.dumps({
+            "protocol": "ahp/1", "accept_protocols": ["ahp/1"], "consumer": {"name": "t", "version": "1"},
+            "features": {"reasoning_delta": True}}), encoding="utf-8")
+        env = dict(self.environ)
+        env.pop("CC_BRIDGE_WAIT_ALL")
+        bridge.handle_event(self.event("SessionEnd", reason="other"), env)
+        caps = json.loads((self.ahp / "capabilities.json").read_text())
+        self.assertFalse(caps["features"]["reasoning_delta"])
+        self.assertEqual(caps["consumer_json"], "partially_applied")
+        self.assertTrue(any("reasoning_delta" in n and "reasoning" in n for n in caps["consumer_notes"]))
+
+
 if __name__ == "__main__":
     unittest.main()

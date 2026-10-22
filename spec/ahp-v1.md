@@ -509,15 +509,15 @@ hook 同步/异步配置在 `claude/hooks/hooks.json`：四个 gate（PreToolUse
 | 文件名 `<seq>-<HookName>.json` | `<seq>-<ahp.event>.json` |
 | `push/cursor`（由 `bridge.py push` 写） | `consumer/push-cursor` |
 | `stop-blocks`（任务目录根） | `state/stop-blocks` |
-| 旧 `wait`（`CC_BRIDGE_WAIT`）的 `pending/<tool_use_id>.json` | 废弃 |
+| 旧 `wait`（`CC_BRIDGE_WAIT`）的 `pending/<tool_use_id>.json` | 废弃；过渡期照写，AHP 树按 gate 写（见下） |
 
 过渡期适配层 SHOULD 同时写旧路径和新路径（双写），现有 bot 的 `pending`/`push`/`watch` 输出（路径在第一列，TAB 后接 `# reply:` 等预览）保持不变。
 
-0.2.0 的做法：旧树 `$CC_BRIDGE_DIR/tasks/<task>/` 与 AHP 树 `$CC_BRIDGE_AHP_DIR/tasks/<task>/` 双写，共用 AHP 的 seq 计数（旧树只有 AHP 独有事件处的空号）。gate 同时轮询两边的 `replies/<seq>.json`，先到先用；两边都接受上表别名，结果一律写 AHP `acks/<seq>.json`。旧 `pending/<tool_use_id>.json`（`CC_BRIDGE_WAIT`）仍只写旧树。
+0.2.0 的做法：旧树 `$CC_BRIDGE_DIR/tasks/<task>/` 与 AHP 树 `$CC_BRIDGE_AHP_DIR/tasks/<task>/` 双写，共用 AHP 的 seq 计数（旧树只有 AHP 独有事件处的空号）。gate 同时轮询两边的 `replies/<seq>.json`，先到先用；两边都接受上表别名，结果一律写 AHP `acks/<seq>.json`。旧的窄等待（`CC_BRIDGE_WAIT`：PreToolUse/PermissionRequest 在 `log` 档时仍阻塞等回复）在 AHP 树里是普通 gate：capabilities 里该事件为 `gate`，写 AHP `pending/<seq>-<event>.json` 和 `acks/<seq>.json`；旧树仍只写 `pending/<tool_use_id>.json`（不写 `<seq>-<Hook>.json`），AHP `replies/<seq>.json` 与旧 `replies/<tool_use_id>.json` 先到先用。超时决定取 `wait.timeout_decision`（缺省 `deny`），也写进 pending 的 `default_decision`；无效 reply 立即按它处理（以前是忽略并继续等）。AHP 树关闭、或 `consumer.json` 把该事件移出 gate 时，退回旧行为（只写旧树）。
 
 ### A.6 9f478f8 与 v1 的差距（Phase 2 修）
 
-0.2.0（`scripts/ahp_cc.py` + `scripts/bridge.py`）已全部处理，`python3 -m conformance --producer cc-adapter` 无预期失败。#4 的做法：坏 JSON 隔约 200 ms 再读一次，仍坏就按 §9.4 `invalid`（不等到 deadline）；#12 由 AHP 树满足，旧树保持原样。
+0.2.0（`scripts/ahp_cc.py` + `scripts/bridge.py`）已全部处理，`python3 -m conformance --producer cc-adapter` 无预期失败。#4 的做法：坏 JSON 隔约 200 ms 再读一次，仍坏就按 §9.4 `invalid`（不等到 deadline）；#12 两棵树都满足：旧树截断对象（`{text, truncated, original_length, sha256}`）也加了 `full_file`（只增字段，旧读者不受影响）。
 
 | # | 现状 | v1 要求 |
 | --- | --- | --- |

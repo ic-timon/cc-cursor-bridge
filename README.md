@@ -135,7 +135,7 @@ SessionStart 和 WorktreeCreate 在 `hooks.json` 里保持同步。SessionStart 
 
 助手命令：`python3 scripts/bridge.py pending <task>`、`reply <task> <seq> <json>`、`push <task> [--since <seq>]`、`watch <task>`。
 
-旧的窄等待 `CC_BRIDGE_WAIT=1` 只在事件模式为 `log` 时再生效。
+旧的窄等待 `CC_BRIDGE_WAIT=1` 只在事件模式为 `log` 时再生效；0.2.0 起它在 AHP 目录里也是一个 gate（pending + ack），旧目录仍写 `pending/<tool_use_id>.json`。
 
 ### 事件清单
 

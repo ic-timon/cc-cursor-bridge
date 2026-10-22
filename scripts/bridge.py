@@ -690,6 +690,12 @@ def wait_settings(cfg: dict, environ: dict) -> dict:
     return wait
 
 
+def narrow_wait_applies(event_name: str, cfg: dict, environ: dict, wait: Optional[dict] = None) -> bool:
+    """Deprecated narrow wait (CC_BRIDGE_WAIT): a log-channel PreToolUse/PermissionRequest that still blocks."""
+    wait = wait_settings(cfg, environ) if wait is None else wait
+    return base_mode_for(event_name, cfg, environ) == "log" and should_wait(event_name, wait, False)
+
+
 def should_wait(event_name: str, wait: dict, already_denied: bool) -> bool:
     if not wait.get("enabled") or already_denied:
         return False
@@ -1316,6 +1322,18 @@ def notice_body(
     return body, full_body, was_truncated
 
 
+def tag_truncated(value: Any, full_file: str) -> Any:
+    """Copy of value where every truncated object also names the full file (spec 4.4)."""
+    if isinstance(value, dict):
+        out = {k: tag_truncated(v, full_file) for k, v in value.items()}
+        if out.get("truncated") is True and "sha256" in out and "text" in out:
+            out["full_file"] = full_file
+        return out
+    if isinstance(value, list):
+        return [tag_truncated(v, full_file) for v in value]
+    return value
+
+
 def write_notice(
     directory: Path,
     kind: str,
@@ -1328,6 +1346,7 @@ def write_notice(
     payload = dict(body)
     if was_truncated:
         payload["full_file"] = f"{kind}/{seq}-{event_name}.full.json"
+        payload = tag_truncated(payload, payload["full_file"])  # Appendix A.6 #12, additive
     path = directory / kind / f"{seq}-{event_name}.json"
     write_atomic(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     if was_truncated:
@@ -1595,6 +1614,12 @@ def handle_event(
     if event_name == "SessionStart" and watch and resolve_event_mode(event_name, cfg, environ) == "wait" and not wait_all.get("enabled"):
         summary["session_start"] = "sync-without-wait"
     mode = base_mode_for(event_name, cfg, environ)
+    wait = wait_settings(cfg, environ)
+    narrow_hook = narrow_wait_applies(event_name, cfg, environ, wait)
+
+    def ahp_mode(hook: str) -> str:
+        # Appendix A.5: in the AHP tree the narrow wait is an ordinary gate.
+        return "wait" if narrow_wait_applies(hook, cfg, environ, wait) else base_mode_for(hook, cfg, environ)
 
     # ---- AHP v1 task (spec Appendix A). consumer.json may move the event to another class.
     task = None
@@ -1608,7 +1633,7 @@ def handle_event(
             cfg,
             rules,
             notes,
-            lambda hook: base_mode_for(hook, cfg, environ),
+            ahp_mode,
             bool(wait_all.get("enabled")),
             base_timeout_ms(cfg, environ),
         )
@@ -1622,6 +1647,28 @@ def handle_event(
     elif AHP_IMPORT_ERROR and env_flag(environ, "CC_BRIDGE_AHP", True):
         stderr += f"cc-cursor-bridge: AHP 模块不可用，只写旧格式: {AHP_IMPORT_ERROR}\n"
     legacy = task is None or ahp_cc.legacy_enabled(environ)
+    narrow: Optional[dict] = None
+    if narrow_hook and task is not None and mode == "wait":
+        narrow_id = safe_file_id(str(event.get("tool_use_id") or ""))
+        timeout_decision = wait.get("timeout_decision", "deny")
+        try:
+            narrow_ms = int(max(0.0, float(wait.get("timeout_seconds", 120))) * 1000)
+        except (TypeError, ValueError):
+            narrow_ms = 120_000
+        narrow = {
+            "id": narrow_id,
+            "default": timeout_decision if timeout_decision in ("allow", "deny") else "deny",
+            "timeout_ms": min(narrow_ms, int((entry or {}).get("timeout_ms") or 170_000)),
+            "interval": max(0.02, float(wait.get("poll_interval_seconds", 0.25))),
+            "body": {
+                "id": narrow_id,
+                "event": event_name,
+                "session_id": event.get("session_id") or "",
+                "tool_name": tool_name,
+                "tool_input": pending_input(tool_input, max(limit, 400), secrets),
+                "created_at": local_iso(),
+            },
+        }
 
     if mode == "off" and event_name not in ("PreToolUse", "WorktreeCreate", "WorktreeRemove", "SessionStart"):
         return HookResult(stderr=stderr)
@@ -1724,7 +1771,8 @@ def handle_event(
                                 {"event": event_name, "input_keys": sorted(str(k) for k in event.keys())})
 
     push_id = ""
-    summary["channel"] = mode
+    legacy_channel = "log" if narrow else mode
+    summary["channel"] = legacy_channel
     blocked_by_probe = probe_stdout is not None and event_name not in ("WorktreeCreate", "WorktreeRemove")
     ahp_after: List[Tuple[str, dict]] = []
     if rule_id:
@@ -1754,9 +1802,11 @@ def handle_event(
         if mode == "wait":
             gate = run_gate(
                 event, event_name, ahp_name, seq, task, entry, ahp_env, directory, legacy, body, full_body,
-                was_truncated, cfg, environ, wait_all, all_rules, ctx, stdout,
+                was_truncated, cfg, environ, wait_all, all_rules, ctx, stdout, narrow=narrow,
             )
-            pending_id = str(seq)
+            pending_id = narrow["id"] if narrow else str(seq)
+            if narrow:
+                summary["wait"] = gate["delivery"]
             stdout, decision, reason = gate["stdout"], gate["label"], gate["reason"]
             ahp_outcome = gate["outcome"]
             ahp_after.extend(gate["after"])
@@ -1779,14 +1829,14 @@ def handle_event(
     if rule_id and "delivery" not in summary:
         summary["delivery"] = "rule"
 
-    wait = wait_settings(cfg, environ)
     if (
         probe_stdout is None
         and mode == "log"
         and not rule_id
         and should_wait(event_name, wait, decision == "deny")
     ):
-        # Deprecated narrow wait (CC_BRIDGE_WAIT, Appendix A.5). Legacy files only.
+        # Deprecated narrow wait (CC_BRIDGE_WAIT, Appendix A.5) when there is no AHP gate for it
+        # (AHP tree off, or consumer.json moved the event out of gate). Legacy files only.
         pending_id = safe_file_id(str(event.get("tool_use_id") or ""))
         narrow = {
             "id": pending_id,
@@ -1825,7 +1875,7 @@ def handle_event(
     record: Dict[str, Any] = {
         "ts": local_iso(),
         "event": event_name,
-        "channel": mode,
+        "channel": legacy_channel,
         "session_id": event.get("session_id") or "",
         "cwd": str(event.get("cwd") or ""),
         "input_keys": sorted(str(key) for key in event.keys()),
@@ -1878,13 +1928,21 @@ def run_gate(
     rules: List[dict],
     ctx: dict,
     host_stdout: str,
+    narrow: Optional[dict] = None,
 ) -> dict:
-    """One gate (spec 4.1, 9): pending, wait, validate, ack, then the CC stdout (Appendix A.2)."""
+    """One gate (spec 4.1, 9): pending, wait, validate, ack, then the CC stdout (Appendix A.2).
+
+    narrow: the deprecated CC_BRIDGE_WAIT gate. The legacy tree then gets only its old
+    pending/<tool_use_id>.json and replies/<tool_use_id>.json; timeout uses wait.timeout_decision.
+    """
     decisions = list((entry or {}).get("decisions") or ahp_decisions(ahp_name))
     default = str((entry or {}).get("default_decision") or ahp_default(ahp_name))
     timeout_ms = int((entry or {}).get("timeout_ms") or min(base_timeout_ms(cfg, environ), 170_000))
-    deadline = (datetime.now().astimezone() + timedelta(milliseconds=timeout_ms)).isoformat(timespec="milliseconds")
     interval = max(0.02, float(wait_all.get("poll_interval_seconds", 0.25)))
+    if narrow:
+        default = narrow["default"] if narrow["default"] in decisions else default
+        timeout_ms, interval = narrow["timeout_ms"], narrow["interval"]
+    deadline = (datetime.now().astimezone() + timedelta(milliseconds=timeout_ms)).isoformat(timespec="milliseconds")
 
     body["reply_file"] = f"replies/{seq}.json"
     body["deadline"] = deadline
@@ -1897,7 +1955,11 @@ def run_gate(
         ahp_cc.ensure_dir(task.dir / "replies")
         task.write_notice("pending", ahp_env)
         paths.append(task.dir / "replies" / f"{seq}.json")
-    if legacy:
+    if legacy and narrow:
+        write_atomic(directory / "pending" / f"{narrow['id']}.json",
+                     json.dumps(narrow["body"], ensure_ascii=False, indent=2) + "\n")
+        paths.append(directory / "replies" / f"{narrow['id']}.json")
+    elif legacy:
         full_body.update({k: body[k] for k in ("reply_file", "deadline", "timeout_ms", "default_decision")})
         write_notice(directory, "pending", seq, event_name, body, full_body, was_truncated)
         paths.append(directory / "replies" / f"{seq}.json")

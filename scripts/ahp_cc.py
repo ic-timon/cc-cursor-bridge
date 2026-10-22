@@ -575,9 +575,10 @@ class Task:
             extra_rules.append(rule)
         features = cj.get("features") if isinstance(cj.get("features"), dict) else {}
         for name, on in features.items():
-            if on and name not in FEATURES:
+            if on and not FEATURES.get(name):
                 partial = True
-                notes.append(f"features.{name} not supported by the CC adapter")
+                why = REASONS_UNSUPPORTED.get(name, "not supported by the CC adapter")
+                notes.append(f"features.{name} {why}")
         if state == "applied" and partial:
             state = "partially_applied"
         self.events = events
@@ -718,6 +719,8 @@ class Task:
 
 FEATURES = {"acks": True, "full_files": True, "updated_input": True, "additional_context": True,
             "message_delta": True, "policy_deny_event": True, "consumer_rules": True, "reasoning_delta": False}
+# Appendix A.2: CC hook input carries no reasoning/thinking text (only MessageDisplay's visible text).
+REASONS_UNSUPPORTED = {"reasoning_delta": "not supported: Claude Code hooks expose no reasoning text"}
 
 
 def max_context_chars(cfg: dict) -> int:

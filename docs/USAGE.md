@@ -241,6 +241,8 @@ python3 scripts/bridge.py watch "$CC_TASK_ID" --ahp
 | 只脱敏 3 个环境变量的值 | 另外脱敏令牌格式：`sk-…`、`ghp_…`、`github_pat_…`、`xox?-…`、`AKIA…`、PEM 私钥 |
 | 通知里的 `transcript_path` 也会被截断 | 路径不截断；UserPromptSubmit 通知带 `prompt`，Elicitation 通知带 `message`/`mcp_server_name`/`requested_schema` |
 | 临时文件 `<name>.tmp` | `.<name>.<pid>.<随机>.tmp` |
+| 旧窄等待（`CC_BRIDGE_WAIT`）的回复不合法：忽略，一直等到超时 | 立即按 `wait.timeout_decision`（缺省 deny）处理；AHP 目录里这是一个普通 gate（pending + ack），旧目录仍只有 `pending/<tool_use_id>.json`，两边的回复都认 |
+| 旧目录通知里的截断对象只有 `text`/`truncated`/`original_length`/`sha256`，完整版要看顶层 `full_file` | 截断对象里也带 `full_file`（只多一个字段） |
 | `additionalContext` 多长都照发（CC 超过 10,000 字符会静默换成文件路径加 2,000 字符预览） | 超过 10,000（按 UTF-16 码元计，bridge JSON `ahp.max_additional_context_chars` 只能调小）就是无效回复，按默认决定处理，不截断。只有等待项（gate）的回复会注入；对 push 通知写的回复不会注入，AHP 目录里会给它一个 `status: invalid` 的 ack。回复里带了该事件不接受的字段（例如 Stop 带 `additionalContext`）也算无效 |
 
 第三方工具（例如 MCP 的 shell 工具）可以在 bridge JSON 里声明 `tool_kind`，规则的 `tool_kinds` 和 `tool.pre` 里的 `command` 就能覆盖它：
@@ -250,6 +252,8 @@ python3 scripts/bridge.py watch "$CC_TASK_ID" --ahp
 ```
 
 只想要一边：`CC_BRIDGE_AHP=0` 只写旧格式；`CC_BRIDGE_LEGACY=0` 只写 AHP（这时 CLI 默认就用 AHP 目录）。
+
+Claude Code 的 hook 不给推理（thinking）内容，所以 capabilities 里 `features.reasoning_delta` 固定为 `false`；`consumer.json` 请求它时记为 `partially_applied` 并写明原因。
 
 检查是否符合规范：`python3 -m conformance --producer cc-adapter`。
 

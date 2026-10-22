@@ -134,7 +134,7 @@ python3 /path/to/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
 
 PreToolUse 回 `allow` 会让这次工具调用跳过权限提示。只在你看过完整命令和路径之后才 allow。
 
-旧的窄等待仍然可用，但只在该事件的模式是 `log` 时生效：`CC_BRIDGE_WAIT=1` 等 PermissionRequest，`CC_BRIDGE_WAIT_PRE_TOOL=1` 再加 PreToolUse。文件名是 `pending/<id>.json`，不是 seq。
+旧的窄等待仍然可用，但只在该事件的模式是 `log` 时生效：`CC_BRIDGE_WAIT=1` 等 PermissionRequest，`CC_BRIDGE_WAIT_PRE_TOOL=1` 再加 PreToolUse。旧目录里文件名是 `pending/<id>.json`，不是 seq；AHP 目录里它是普通 gate（`pending/<seq>-<事件>.json`，可用 `--ahp` 回复）。回复不合法时立即 deny。
 
 notifier 默认关，而且当前版本即使打开也只把打算发给 Cursor Cloud Agents API 的 followup 写到 `outbox/`，不发 HTTP。API key 只从环境变量 `CC_BRIDGE_CURSOR_API_KEY` 读取，禁止写进仓库、命令行回显或事件日志。
 
