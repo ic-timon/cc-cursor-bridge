@@ -142,6 +142,14 @@ def main(argv=None) -> int:
                                         "expected_failures": sorted(legacy_fail)},
                                        ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"wrote {EXPECTED} ({len(legacy_fail)} expected failures)")
+    if not a.scenario and not a.producer:
+        from .cc_example import check as example_check
+        ex_status, ex_out = example_check()
+        print(f"cc example (spec/examples/capabilities.cc-adapter.json == adapter output): {ex_status}")
+        for line in ex_out if ex_status == "fail" else []:
+            print(f"  {line}")
+        if ex_status == "fail":
+            exit_code = exit_code or 1
     if a.json:
         Path(a.json).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return exit_code
