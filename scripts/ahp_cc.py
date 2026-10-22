@@ -44,7 +44,7 @@ SYNTHESIZED = _MAP.SYNTHESIZED
 AHP_TO_CC = {ahp: cc for cc, (ahp, _, _) in CC_TO_AHP.items()}
 
 PROTOCOL = "ahp/1"
-SPEC_VERSION = "1.0.0"
+SPEC_VERSION = "1.0.0-draft.3"
 PRODUCER_NAME = "cc-cursor-bridge"
 HOST_TIMEOUT_FALLBACK_MS = 180_000
 HOST_MARGIN_MS = 10_000
