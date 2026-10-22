@@ -1,0 +1,5 @@
+{
+  "producer": "cc-cursor-bridge AHP v1 adapter (scripts/ahp_cc.py)",
+  "note": "Empty on purpose: the adapter must pass every check. Add an entry only with a justification.",
+  "expected_failures": []
+}

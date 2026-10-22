@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Adapter that drives the *current* cc-cursor-bridge hook (scripts/dispatch.py
-at this checkout, 9f478f8 behaviour) with scenario steps, then converts its
-legacy task dir to AHP shape with spec/tools/legacy_to_ahp.convert_dir.
+"""Adapter that drives the pre-AHP cc-cursor-bridge hook (scripts/dispatch.py as of
+commit 9f478f8, extracted with `git archive` into a cache dir) with scenario steps,
+then converts its legacy task dir to AHP shape with spec/tools/legacy_to_ahp.convert_dir.
+This keeps expected/legacy-9f478f8.json meaningful after Phase 2 changed scripts/.
+If git or the commit is unavailable it falls back to this checkout (version "...-unpinned").
 
 Each step becomes one `python3 scripts/dispatch.py` run with a CC hook JSON on
 stdin, exactly as Claude Code would call it. The hook's stdout/exit code is
@@ -16,8 +18,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -30,13 +34,35 @@ CLASS_TO_MODE = {"gate": "wait", "notify": "push", "log": "log"}
 RENAME_IN = {"stop_active": "stop_hook_active", "text": "delta", "server": "mcp_server_name"}
 
 
-def version() -> str:
+PIN = "9f478f8"
+
+
+def pinned_root() -> Path:
+    """The bridge tree at PIN, cached per user; REPO when it cannot be extracted."""
+    cache = Path(tempfile.gettempdir()) / f"ahp-conformance-{os.getuid()}" / f"bridge-{PIN}"
+    if (cache / "scripts" / "dispatch.py").is_file():
+        return cache
     try:
-        out = subprocess.run(["git", "-C", str(REPO), "log", "-1", "--format=%h", "--", "scripts/bridge.py",
-                              "scripts/dispatch.py"], capture_output=True, text=True, timeout=10)
-        return out.stdout.strip() or "unknown"
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(tempfile.mkdtemp(dir=cache.parent, prefix=".extract-"))
+        arch = subprocess.run(["git", "-C", str(REPO), "archive", "--format=tar", PIN,
+                               "scripts", "config", "claude", ".claude-plugin"],
+                              capture_output=True, timeout=30, check=True)
+        subprocess.run(["tar", "-x", "-C", str(tmp)], input=arch.stdout, check=True, timeout=30)
+        try:
+            tmp.rename(cache)
+        except OSError:  # another scenario process won the race
+            shutil.rmtree(tmp, ignore_errors=True)
+        return cache if (cache / "scripts" / "dispatch.py").is_file() else REPO
     except (OSError, subprocess.SubprocessError):
-        return "unknown"
+        return REPO
+
+
+BRIDGE = pinned_root()
+
+
+def version() -> str:
+    return PIN if BRIDGE != REPO else f"{PIN}-unpinned"
 
 
 def cc_input(step: dict, cwd: str) -> dict:
@@ -102,7 +128,7 @@ def main(argv=None) -> int:
     work = root / "work"
     work.mkdir(exist_ok=True)
     env = dict(os.environ)
-    env.update({"CC_BRIDGE_DIR": str(legacy_root), "CC_TASK_ID": a.task, "CLAUDE_PLUGIN_ROOT": str(REPO),
+    env.update({"CC_BRIDGE_DIR": str(legacy_root), "CC_TASK_ID": a.task, "CLAUDE_PLUGIN_ROOT": str(BRIDGE),
                 "CC_BRIDGE_WAIT_ALL_TIMEOUT": str(prod.get("timeout_ms", 120000) / 1000.0)})
     for k in list(env):  # never inherit a real bridge setup
         if k.startswith("CC_BRIDGE_") and k not in ("CC_BRIDGE_DIR", "CC_BRIDGE_WAIT_ALL_TIMEOUT"):
@@ -130,7 +156,7 @@ def main(argv=None) -> int:
                 if ev == "message.delta" and cls == "notify":
                     env["CC_BRIDGE_ASSISTANT_TEXT"] = "1"
         if cj.get("extra_rules"):
-            base = rules if rules is not None else read_json(REPO / "config" / "rules.json")["rules"]
+            base = rules if rules is not None else read_json(BRIDGE / "config" / "rules.json")["rules"]
             rules = list(base) + list(cj["extra_rules"])
     if rules is not None:
         (root / "legacy-config" / "rules.json").write_text(json.dumps({"rules": rules}), encoding="utf-8")
@@ -143,7 +169,7 @@ def main(argv=None) -> int:
             stdin = "{not json"
         if step.get("fault") == "crash":
             step_env["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "boom"
-        proc = subprocess.run([sys.executable, str(REPO / "scripts" / "dispatch.py")], input=stdin,
+        proc = subprocess.run([sys.executable, str(BRIDGE / "scripts" / "dispatch.py")], input=stdin,
                               capture_output=True, text=True, env=step_env, cwd=str(work), timeout=300)
         append_line(effects, {"step": i, "event": step["event"],
                               "effect": effect_of(step["event"], proc.stdout, proc.returncode),

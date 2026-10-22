@@ -85,8 +85,11 @@ export CC_BRIDGE_DIR="${CC_BRIDGE_DIR:-$HOME/.cc-bridge}"
 | `CC_BRIDGE_EVENT_MODE_<事件名>` | 覆盖该事件：`wait`、`push`、`log`、`off`。例：`CC_BRIDGE_EVENT_MODE_Stop=log` |
 | `CC_BRIDGE_ASSISTANT_TEXT` | `1` 时把 `MessageDisplay` 从 `log` 改成 `push`，实时带出助手文本。默认关；也受 `assistant_text.enabled` 配置控制 |
 | `CC_BRIDGE_WATCH` | 用系统路径分隔符列出要监视的文件。SessionStart 会注入 `watchPaths`，并且不等回复 |
+| `CC_BRIDGE_AHP_DIR` | AHP v1 目录根，默认 `$CC_BRIDGE_DIR/ahp` |
+| `CC_BRIDGE_AHP` | `0` 时不写 AHP 目录（只写旧格式）。默认 `1` |
+| `CC_BRIDGE_LEGACY` | `0` 时不写旧格式目录（只写 AHP）；`pending`/`push`/`watch`/`reply` 也随之走 AHP 目录。默认 `1` |
 
-日志在 `$CC_BRIDGE_DIR/tasks/$CC_TASK_ID/events.jsonl`。
+日志在 `$CC_BRIDGE_DIR/tasks/$CC_TASK_ID/events.jsonl`。AHP v1 的同一批事件在 `$CC_BRIDGE_DIR/ahp/tasks/$CC_TASK_ID/`，见下面的「迁移到 AHP v1（0.2.0）」。
 
 ### pending、reply、push、watch
 
@@ -123,6 +126,8 @@ python3 /path/to/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{
 ```
 
 `PreToolUse` 的 `decision` 还可以是 `ask` 或 `defer`。超时：PreToolUse 和 PermissionRequest 拒绝，Elicitation 拒绝提问，Stop 放行结束。
+
+从 0.2.0 起，回复不合法时和超时一样按默认决定处理，**不再交给 Claude Code 自己的权限流程**：`decision` 拼错或不在允许范围、有未知字段（例如 `updatedinput`）、坏 JSON、Stop 的 `block` 没写 `reason`、别名和正式字段冲突（`{"decision":"allow","behavior":"deny"}`）。`bridge.py reply` 会先按同样的规则校验，不合法就 exit 2、什么都不写；同一个 seq 已有不同的回复也 exit 2，重写一模一样的回复 exit 0。
 
 ### 回答和工具返回
 
@@ -202,6 +207,55 @@ WAIT 的 hook timeout 是 180 秒。等待本身默认 120 秒（`wait_all.timeo
 ```
 
 命中后立刻 deny，不写 pending。换一份规则文件用 `CC_BRIDGE_RULES=/path/to/rules.json`。
+
+## 迁移到 AHP v1（0.2.0）
+
+0.2.0 起 bridge 是 AHP v1（`ahp/1`，见 `spec/ahp-v1.md`）的 producer。默认**双写**：
+
+- 旧目录 `$CC_BRIDGE_DIR/tasks/<task>/` 不变：文件名 `<seq>-<Hook>.json`、`events.jsonl` 的字段、`pending`/`push`/`watch` 的输出（路径在第一列，TAB 后接 `# ...`）都和以前一样。现有 bot 不用改。
+- 新目录 `$CC_BRIDGE_DIR/ahp/tasks/<task>/`（`CC_BRIDGE_AHP_DIR` 可改）：`capabilities.json`、`consumer.json`（consumer 写）、`pending/<seq>-<事件>.json`、`push/` 和 `push/stream.jsonl`、`replies/<seq>.json`、`acks/<seq>.json`、`events.jsonl`、`state/`。
+
+两边共用一个 seq。只在 AHP 里有的事件（`policy.deny`、`producer.error`、`plan.update`）也占 seq，所以旧目录里的 seq 会有空号。
+
+回复写哪边都行，hook 两边都看，先到先用。旧别名（`behavior`、`message`、`updatedInput`、`{"ack":true}`、Elicitation 的 `allow`/`deny`）两边都接受。新代码请写 AHP 字段：
+
+```bash
+python3 scripts/bridge.py pending "$CC_TASK_ID" --ahp
+python3 scripts/bridge.py reply "$CC_TASK_ID" 4 '{"decision":"allow","reason":"只读"}' --ahp
+python3 scripts/bridge.py push "$CC_TASK_ID" --ahp      # 游标在 consumer/push-cursor
+python3 scripts/bridge.py watch "$CC_TASK_ID" --ahp
+```
+
+`--ahp` 下 `pending` 只列还没有回复、也还没有 ack 的项；`reply` 写规范化后的 AHP 字段（带 `protocol`、`seq`）。每个 gate 结束时 `acks/<seq>.json` 写明实际执行的决定：`status` 是 `consumed`/`expired`/`invalid`，`via` 是 `reply`/`timeout`/`rule`/`error`/`invalid_reply`；Stop 另有 `accepted`。
+
+行为变化（0.2.0，都是 fail-closed 方向）：
+
+| 以前 | 现在 |
+| --- | --- |
+| hook 脚本崩溃或 stdin 不是 JSON：exit 0、无输出，Claude Code 走自己的权限流程 | PreToolUse/PermissionRequest 输出 deny，Elicitation 输出 decline，Stop 以 exit 0 空输出结束本轮；写 ack（`via: error`）和 `producer.error`。hooks.json 把 hook 名作为参数传给 `dispatch.py`，所以 stdin 坏了也知道是哪个 hook；不知道时 exit 2 |
+| 不合法的回复（拼错的 `decision`、PreToolUse 上的 `{"ack":true}`、未知字段）：空输出，等于没表态 | 按默认决定：deny / decline / Stop 结束；ack `status: invalid` |
+| 规则里的正则写错：跳过这条规则 | 这条规则对它管的工具 deny，并发 `producer.error` |
+| `updatedInput` 改写后直接执行 | 改写后的输入重跑规则，命中就 deny（ack `via: rule`，发 `policy.deny`） |
+| `reply` 什么都写 | 先校验，不合法 exit 2 |
+| 等待秒数不封顶 | 封顶 170 秒（同步 hook 的 180 秒减 10 秒余量） |
+| 只脱敏 3 个环境变量的值 | 另外脱敏令牌格式：`sk-…`、`ghp_…`、`github_pat_…`、`xox?-…`、`AKIA…`、PEM 私钥 |
+| 通知里的 `transcript_path` 也会被截断 | 路径不截断；UserPromptSubmit 通知带 `prompt`，Elicitation 通知带 `message`/`mcp_server_name`/`requested_schema` |
+| 临时文件 `<name>.tmp` | `.<name>.<pid>.<随机>.tmp` |
+| 旧窄等待（`CC_BRIDGE_WAIT`）的回复不合法：忽略，一直等到超时 | 立即按 `wait.timeout_decision`（缺省 deny）处理；AHP 目录里这是一个普通 gate（pending + ack），旧目录仍只有 `pending/<tool_use_id>.json`，两边的回复都认 |
+| 旧目录通知里的截断对象只有 `text`/`truncated`/`original_length`/`sha256`，完整版要看顶层 `full_file` | 截断对象里也带 `full_file`（只多一个字段） |
+| `additionalContext` 多长都照发（CC 超过 10,000 字符会静默换成文件路径加 2,000 字符预览） | 超过 10,000（按 UTF-16 码元计，bridge JSON `ahp.max_additional_context_chars` 只能调小）就是无效回复，按默认决定处理，不截断。只有等待项（gate）的回复会注入；对 push 通知写的回复不会注入，AHP 目录里会给它一个 `status: invalid` 的 ack。回复里带了该事件不接受的字段（例如 Stop 带 `additionalContext`）也算无效 |
+
+第三方工具（例如 MCP 的 shell 工具）可以在 bridge JSON 里声明 `tool_kind`，规则的 `tool_kinds` 和 `tool.pre` 里的 `command` 就能覆盖它：
+
+```json
+{"ahp": {"tool_kinds": {"mcp__box__run": {"kind": "shell", "argv": "argv"}}}}
+```
+
+只想要一边：`CC_BRIDGE_AHP=0` 只写旧格式；`CC_BRIDGE_LEGACY=0` 只写 AHP（这时 CLI 默认就用 AHP 目录）。
+
+Claude Code 的 hook 不给推理（thinking）内容，所以 capabilities 里 `features.reasoning_delta` 固定为 `false`；`consumer.json` 请求它时记为 `partially_applied` 并写明原因。
+
+检查是否符合规范：`python3 -m conformance --producer cc-adapter`。
 
 ## 容易踩的坑
 

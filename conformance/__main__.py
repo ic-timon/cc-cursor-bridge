@@ -1,12 +1,13 @@
 """python3 -m conformance [options]
 
-Default: run every scenario against the reference replay producer and the
-legacy (9f478f8) bridge, check the static legacy fixture, and print a report.
-Exit 0 when the replay producer passes everything and the legacy results match
-expected/legacy-9f478f8.json (expected failures).
+Default: run every scenario against the reference replay producer, the legacy
+(9f478f8) bridge and the AHP v1 cc-adapter, check the static legacy fixture, and
+print a report. Exit 0 when every failure is listed in that producer's expected
+file: expected/legacy-9f478f8.json for legacy-bridge and fixture,
+expected/<producer>.json for the others (replay has none; cc-adapter's is empty).
 
 Options:
-  --producer NAME|CMD   replay | legacy-bridge | any adapter command (quoted string). Repeatable.
+  --producer NAME|CMD   replay | legacy-bridge | cc-adapter | any adapter command (quoted string). Repeatable.
   --scenario ID         run only these scenarios (repeatable)
   --no-fixtures         skip static fixture checks
   --json FILE           write the full report as JSON
@@ -31,6 +32,20 @@ from .harness import PRODUCERS, run_scenario, run_static
 PKG = Path(__file__).resolve().parent
 EXPECTED = PKG / "expected" / "legacy-9f478f8.json"
 LEGACY_NAMES = ("legacy-bridge", "fixture")
+
+
+def expected_file(producer_key: str) -> Path:
+    if producer_key in LEGACY_NAMES:
+        return EXPECTED
+    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in producer_key)
+    return PKG / "expected" / f"{safe}.json"
+
+
+def load_expected(producer_key: str) -> set:
+    path = expected_file(producer_key)
+    if not path.is_file():
+        return set()
+    return set(json.loads(path.read_text(encoding="utf-8")).get("expected_failures") or [])
 
 
 def key(item: dict, r: dict) -> str:
@@ -68,7 +83,7 @@ def main(argv=None) -> int:
     val = Validators()
     if not val.available:
         print(f"note: {val.note}")
-    producers = a.producer or ["replay", "legacy-bridge"]
+    producers = a.producer or ["replay", "legacy-bridge", "cc-adapter"]
     report = {"runs": []}
     for name in producers:
         cmd = PRODUCERS.get(name) or shlex.split(name)
@@ -84,31 +99,29 @@ def main(argv=None) -> int:
                 r["producer_key"] = "fixture"
                 report["runs"].append(r)
 
-    expected = set(json.loads(EXPECTED.read_text(encoding="utf-8"))["expected_failures"]) if EXPECTED.is_file() else set()
     exit_code = 0
     summary = {}
     legacy_fail = []
     for item in report["runs"]:
         pk = item["producer_key"]
         s = summary.setdefault(pk, {"pass": 0, "fail": 0, "skip": 0, "xfail": 0, "xpass": 0})
+        expected = load_expected(pk)
         for r in item["results"]:
             st = r["status"]
-            if pk in LEGACY_NAMES:
-                k = key(item, r)
-                if st == "fail":
+            k = key(item, r)
+            if st == "fail":
+                if pk in LEGACY_NAMES:
                     legacy_fail.append(k)
-                    st = "xfail" if k in expected else "fail"
-                elif st == "pass" and k in expected:
-                    st = "xpass"
+                st = "xfail" if k in expected else "fail"
+            elif st == "pass" and k in expected:
+                st = "xpass"
             r["reported"] = st
             s[st] += 1
             if st == "fail" or (a.v and st in ("pass", "xpass")) or st == "xpass":
                 flag = {"fail": "FAIL ", "pass": "ok   ", "xpass": "XPASS"}[st]
                 root = f"  [{item['root']}]" if item.get("root") else ""
                 print(f"{flag} [{pk}] {item['scenario']} {r['id']} {r['title']}: {r['detail']}{root}")
-        if pk not in LEGACY_NAMES and any(r["status"] == "fail" for r in item["results"]):
-            exit_code = 1
-        if pk in LEGACY_NAMES and any(r["reported"] == "fail" for r in item["results"]):
+        if any(r["reported"] == "fail" for r in item["results"]):
             exit_code = 1
 
     print()

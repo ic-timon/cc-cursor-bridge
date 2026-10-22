@@ -4,7 +4,8 @@ Checks that a producer (Claude Code adapter, RINO, …) follows `spec/ahp-v1.md`
 Stdlib only; schema checks use `jsonschema` when installed and are skipped otherwise.
 
 ```bash
-python3 -m conformance                 # replay + legacy bridge + static fixture, prints a report
+python3 -m conformance                 # replay + legacy bridge + cc-adapter + static fixture
+python3 -m conformance --producer cc-adapter   # the AHP v1 Claude Code adapter in this checkout
 python3 -m conformance --producer replay -v
 python3 -m conformance --producer "python3 /path/to/rino-adapter.py"
 python3 -m conformance --list          # scenarios and generic checks
@@ -12,10 +13,11 @@ python3 -m conformance --json report.json --keep
 python3 -m conformance.selftest        # mutation test: broken reference producers must be caught
 ```
 
-Exit code 0 means: the reference replay producer passes every check, and the
-legacy bridge fails exactly the checks in `expected/legacy-9f478f8.json`
-(expected failures, Phase 2 work). An XPASS (a legacy check that now passes)
-is printed so the expected list can be shrunk with `--update-expected`.
+Exit code 0 means every failure is an expected one: the legacy bridge (and the
+static fixture) may fail only the checks in `expected/legacy-9f478f8.json`;
+any other producer only those in `expected/<producer>.json` (none for replay;
+`expected/cc-adapter.json` is empty on purpose). An XPASS (an expected failure
+that now passes) is printed so the list can be shrunk with `--update-expected`.
 
 ## Pieces
 
@@ -25,10 +27,12 @@ is printed so the expected list can be shrunk with `--update-expected`.
 | `consumer.py` | scripted consumer: replies on cue (allow/deny/ask/block/ack/accept/decline/invalid/raw/late/none); `source: "push"` items reply to notify events (spec 7.3 #1) |
 | `checks.py` | generic checks G01–G17 over a task dir, scenario expectations E00–E13 |
 | `producers/replay.py` | reference producer: replays scenario host events and implements the producer side of the spec |
-| `producers/legacy_bridge.py` | drives this checkout's `scripts/dispatch.py` (9f478f8 behaviour) per step, converts with `legacy_to_ahp.convert_dir` |
+| `producers/legacy_bridge.py` | drives `scripts/dispatch.py` as of 9f478f8 (extracted with `git archive` into `$TMPDIR/ahp-conformance-<uid>/`) per step, converts with `legacy_to_ahp.convert_dir` |
+| `producers/cc_adapter.py` | drives this checkout's hooks.json commands (`dispatch.py <Hook>`) per step; the bridge writes the AHP tree itself |
 | `scenarios/*.json` | 26 scenarios (`tools/build_scenarios.py`, `tools/snapshot_to_scenario.py` regenerate them) |
 | `fixtures/legacy-9f478f8-demo/` | `demo-bridge-snapshot` converted to AHP shape, checked statically |
-| `expected/legacy-9f478f8.json` | expected failures of the current bridge |
+| `expected/legacy-9f478f8.json` | expected failures of the pre-AHP bridge (9f478f8) |
+| `expected/cc-adapter.json` | expected failures of the AHP adapter (empty) |
 | `MAPPING.md` | the 36 bridge unit tests → scenarios / N/A |
 
 ## Example drift check

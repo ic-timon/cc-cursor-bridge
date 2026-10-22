@@ -26,6 +26,7 @@ from .consumer import ScriptedConsumer
 PRODUCERS = {
     "replay": [sys.executable, str(REPO / "conformance" / "producers" / "replay.py")],
     "legacy-bridge": [sys.executable, str(REPO / "conformance" / "producers" / "legacy_bridge.py")],
+    "cc-adapter": [sys.executable, str(REPO / "conformance" / "producers" / "cc_adapter.py")],
 }
 
 

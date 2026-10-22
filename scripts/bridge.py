@@ -16,7 +16,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -30,6 +30,14 @@ ABS_SSH = re.compile(
     r"(?:^|[\s'\"=:])(/(?:[^\s'\"|&;<>]+/)*\.ssh\b[^\s'\"|&;<>]*)"
 )
 REL_SSH = re.compile(r"(?<![\w./-])(\.ssh\b(?:/[^\s'\"|&;<>]+)?)")
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+AHP_IMPORT_ERROR = ""
+try:  # AHP v1 producer (spec Appendix A). Missing spec/tools degrades to the legacy tree only.
+    import ahp_cc  # noqa: E402
+except Exception as _exc:  # noqa: BLE001
+    ahp_cc = None  # type: ignore[assignment]
+    AHP_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
 
 
 @dataclass
@@ -222,9 +230,9 @@ def load_config(root: Path, environ: dict) -> Tuple[dict, str]:
         return cfg, f"配置文件无法解析，已回退到内置配置: {exc}"
     if not isinstance(data, dict):
         return cfg, "配置文件不是对象，已回退到内置配置"
-    for key in ("notifier", "wait", "wait_all", "log", "assistant_text", "pending", "stop", "events"):
+    for key in ("notifier", "wait", "wait_all", "log", "assistant_text", "pending", "stop", "events", "ahp"):
         if isinstance(data.get(key), dict):
-            cfg[key].update(data[key])
+            cfg.setdefault(key, {}).update(data[key])
     return cfg, ""
 
 
@@ -268,10 +276,22 @@ def secret_values(environ: dict) -> List[str]:
     return found
 
 
+TOKEN_PATTERNS = [re.compile(p) for p in (
+    r"\bsk-(?:ant-)?[A-Za-z0-9_-]{16,}",
+    r"\bgh[pousr]_[A-Za-z0-9]{20,}",
+    r"\bgithub_pat_[A-Za-z0-9_]{20,}",
+    r"\bxox[abprs]-[A-Za-z0-9-]{10,}",
+    r"\bAKIA[0-9A-Z]{16}\b",
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)",
+)]
+
+
 def redact(text: str, secrets: List[str]) -> str:
     for secret in secrets:
         if secret and secret in text:
             text = text.replace(secret, "[redacted]")
+    for pattern in TOKEN_PATTERNS:  # spec 12: token-shaped strings (SHOULD)
+        text = pattern.sub("[redacted]", text)
     return text
 
 
@@ -670,6 +690,12 @@ def wait_settings(cfg: dict, environ: dict) -> dict:
     return wait
 
 
+def narrow_wait_applies(event_name: str, cfg: dict, environ: dict, wait: Optional[dict] = None) -> bool:
+    """Deprecated narrow wait (CC_BRIDGE_WAIT): a log-channel PreToolUse/PermissionRequest that still blocks."""
+    wait = wait_settings(cfg, environ) if wait is None else wait
+    return base_mode_for(event_name, cfg, environ) == "log" and should_wait(event_name, wait, False)
+
+
 def should_wait(event_name: str, wait: dict, already_denied: bool) -> bool:
     if not wait.get("enabled") or already_denied:
         return False
@@ -684,9 +710,7 @@ def wait_for_reply(task_dir: Path, request_id: str, pending_body: dict, wait: di
     pending_path = task_dir / "pending" / f"{request_id}.json"
     reply_path = task_dir / "replies" / f"{request_id}.json"
     pending_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = pending_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(pending_body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(pending_path)
+    write_atomic(pending_path, json.dumps(pending_body, ensure_ascii=False, indent=2) + "\n")
     timeout = max(0.0, float(wait.get("timeout_seconds", 120)))
     interval = max(0.05, float(wait.get("poll_interval_seconds", 0.25)))
     default = wait.get("timeout_decision", "deny")
@@ -768,9 +792,14 @@ def increment_stop_blocks(task_dir: Path) -> int:
 
 def write_atomic(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.parent / (path.name + ".tmp")
-    temporary.write_text(text, encoding="utf-8")
-    temporary.replace(path)
+    # Dot-prefixed and unique so readers that skip dotfiles never see a half-written file.
+    temporary = path.parent / f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+    try:
+        temporary.write_text(text, encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def reserve_seq(task_dir: Path) -> int:
@@ -1190,13 +1219,17 @@ def notice_extra_fields(
         full[key] = whole
         truncated = truncated or was_truncated
 
+    def add_path(key: str, value: Any) -> None:
+        # Paths are never cut (Appendix A.6): a truncated transcript_path is useless.
+        short[key] = full[key] = redact(str(value), secrets)
+
     if event_name == "MessageDisplay" and assistant_text:
         delta = event.get("delta")
         if isinstance(delta, str) and delta:
             add("assistant_text", delta, log_limit)
         transcript = event.get("transcript_path")
         if isinstance(transcript, str) and transcript:
-            add("transcript_path", transcript, log_limit)
+            add_path("transcript_path", transcript)
         for key in ("message_id", "turn_id"):
             value = event.get(key)
             if isinstance(value, str) and value:
@@ -1212,12 +1245,27 @@ def notice_extra_fields(
             add("last_assistant_message", message, content_limit)
         transcript = event.get("transcript_path")
         if isinstance(transcript, str) and transcript:
-            add("transcript_path", transcript, content_limit)
+            add_path("transcript_path", transcript)
         if event_name == "SubagentStop":
             for key in ("agent_transcript_path", "agent_type", "agent_id"):
                 value = event.get(key)
                 if isinstance(value, str) and value:
-                    add(key, value, content_limit)
+                    if key.endswith("_path"):
+                        add_path(key, value)
+                    else:
+                        add(key, value, content_limit)
+    if event_name in ("UserPromptSubmit", "UserPromptExpansion"):
+        prompt = event.get("prompt")
+        if isinstance(prompt, str) and prompt:
+            add("prompt", prompt, content_limit)
+    if event_name in ("Elicitation", "ElicitationResult"):
+        for key in ("message", "mcp_server_name", "mode", "url", "elicitation_id", "action"):
+            value = event.get(key)
+            if isinstance(value, str) and value:
+                add(key, value, content_limit)
+        for key in ("requested_schema", "content"):
+            if isinstance(event.get(key), dict):
+                add(key, event[key], content_limit)
     if event_name in ("PostToolUse", "PostToolUseFailure"):
         response = event.get("tool_response")
         if response not in (None, ""):
@@ -1274,6 +1322,18 @@ def notice_body(
     return body, full_body, was_truncated
 
 
+def tag_truncated(value: Any, full_file: str) -> Any:
+    """Copy of value where every truncated object also names the full file (spec 4.4)."""
+    if isinstance(value, dict):
+        out = {k: tag_truncated(v, full_file) for k, v in value.items()}
+        if out.get("truncated") is True and "sha256" in out and "text" in out:
+            out["full_file"] = full_file
+        return out
+    if isinstance(value, list):
+        return [tag_truncated(v, full_file) for v in value]
+    return value
+
+
 def write_notice(
     directory: Path,
     kind: str,
@@ -1286,6 +1346,7 @@ def write_notice(
     payload = dict(body)
     if was_truncated:
         payload["full_file"] = f"{kind}/{seq}-{event_name}.full.json"
+        payload = tag_truncated(payload, payload["full_file"])  # Appendix A.6 #12, additive
     path = directory / kind / f"{seq}-{event_name}.json"
     write_atomic(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     if was_truncated:
@@ -1375,15 +1436,146 @@ def remove_worktree(cwd: Path, raw_path: str) -> Tuple[int, str]:
     return 0, ""
 
 
+def base_mode_for(event_name: str, cfg: dict, environ: dict) -> str:
+    """Channel from env/config before consumer.json: wait, push, log or off."""
+    mode = resolve_event_mode(event_name, cfg, environ)
+    if event_name == "MessageDisplay" and assistant_text_enabled(cfg, environ) and mode == "log":
+        mode = "push"
+    if (
+        event_name == "SessionStart"
+        and watch_paths_from_env(environ)
+        and mode == "wait"
+        and not wait_all_settings(cfg, environ).get("enabled")
+    ):
+        mode = "push"
+    return mode
+
+
+def base_timeout_ms(cfg: dict, environ: dict) -> int:
+    try:
+        return max(0, int(float(wait_all_settings(cfg, environ).get("timeout_seconds", 120)) * 1000))
+    except (TypeError, ValueError):
+        return 120_000
+
+
+def task_id_for(event: dict, environ: dict) -> str:
+    return task_dir_for(event, environ).name
+
+
+def evaluate_rules(rules: List[dict], ctx: dict) -> Tuple[Optional[dict], str]:
+    """First matching rule. A rule whose regex is broken denies the tools it covers (spec 11)."""
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        effective = dict(rule)
+        kinds = rule.get("tool_kinds")
+        if isinstance(kinds, list) and kinds:
+            if ctx.get("tool_kind") in kinds:
+                effective["tools"] = []
+            elif not rule.get("tools"):
+                continue
+        before = len(ctx["rule_errors"])
+        try:
+            matched = rule_matches(effective, ctx)
+        except re.error:
+            ctx["rule_errors"].append(f"{rule.get('id')}: 正则无效")
+            matched = False
+        if matched:
+            return rule, ""
+        if len(ctx["rule_errors"]) > before:
+            error = "; ".join(ctx["rule_errors"][before:])
+            broken = {
+                "id": str(rule.get("id") or "rule-error"),
+                "reason": f"规则 {rule.get('id')} 无法求值，按拒绝处理: {error}",
+            }
+            return broken, error
+    return None, ""
+
+
+def to_cc_reply(reply: dict) -> dict:
+    """Canonical AHP reply -> the field names apply_reply() turns into CC stdout."""
+    out: Dict[str, Any] = {"decision": "defer" if reply.get("x-cc-defer") else reply.get("decision")}
+    if reply.get("reason"):
+        out["reason"] = reply["reason"]
+    for new, old in (
+        ("updated_input", "updatedInput"),
+        ("additional_context", "additionalContext"),
+        ("watch_paths", "watchPaths"),
+        ("worktree_path", "worktreePath"),
+        ("display_content", "displayContent"),
+        ("content", "content"),
+    ):
+        if new in reply:
+            out[old] = reply[new]
+    return out
+
+
+def default_label(event_name: str, decision: str, via: str) -> str:
+    prefix = {"timeout": "timeout", "invalid_reply": "invalid", "error": "error"}.get(via, via)
+    if event_name == "Stop":
+        return f"{prefix}-allow-stop"
+    if decision in ("deny", "decline", "block"):
+        return f"{prefix}-{decision}"
+    return f"{prefix}-noop"
+
+
+def poll_replies(paths: List[Path], timeout: float, interval: float) -> Tuple[Optional[Any], str, str, Optional[Path]]:
+    """First reply file to appear among paths. Returns (data, error, sha256, path); path None on timeout."""
+    deadline = time.monotonic() + max(0.0, timeout)
+    while True:
+        for path in paths:
+            if os.path.lexists(path):
+                data, error, sha = ahp_cc.read_reply(path) if ahp_cc else _read_reply_plain(path)
+                if error and "not JSON" in error:
+                    time.sleep(0.2)  # a non-atomic writer may still be writing; look once more
+                    data, error, sha = ahp_cc.read_reply(path) if ahp_cc else _read_reply_plain(path)
+                return data, error or "", sha, path
+        if time.monotonic() >= deadline:
+            return None, "", "", None
+        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+
+
+def _read_reply_plain(path: Path) -> Tuple[Optional[Any], Optional[str], str]:
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        return None, f"unreadable reply: {exc}", ""
+    sha = hashlib.sha256(raw).hexdigest()
+    try:
+        return json.loads(raw.decode("utf-8")), None, sha
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return None, f"reply is not JSON: {exc}", sha
+
+
+def _normalize(data: Any, seq: int, ahp_name: str, decisions: List[str],
+               max_context: int = 10_000) -> Tuple[Optional[dict], List[str]]:
+    if ahp_cc:
+        return ahp_cc.normalize_reply(data, seq, ahp_name, decisions, max_context)
+    if not isinstance(data, dict):
+        return None, ["reply is not a JSON object"]
+    decision = str(data.get("decision") or data.get("behavior") or ("ack" if data.get("ack") is True else "")).lower()
+    if decision not in decisions:
+        return None, [f"decision {decision!r} not in {decisions}"]
+    return {"decision": decision, "reason": str(data.get("reason") or data.get("message") or "")}, []
+
+
+CURRENT_EVENT: Optional[dict] = None
+
+
 def handle_event(
     event: dict,
     environ: Optional[dict] = None,
     rules: Optional[List[dict]] = None,
     cfg: Optional[dict] = None,
 ) -> HookResult:
+    """Run one hook. Writes the legacy task dir and the AHP v1 task dir (spec Appendix A)."""
+    global CURRENT_EVENT
     environ = dict(os.environ if environ is None else environ)
     if not isinstance(event, dict):
-        return HookResult(stderr="cc-cursor-bridge: stdin 不是 JSON 对象\n")
+        return fail_closed(environ, None, "stdin 不是 JSON 对象", stage="input")
+    CURRENT_EVENT = event
+    if str(environ.get("CC_BRIDGE_FAULT") or "").strip().lower() == "crash":
+        raise RuntimeError("CC_BRIDGE_FAULT=crash: injected producer failure (tests only)")
     root = plugin_root_from(environ)
     notes = []
     if rules is None:
@@ -1414,19 +1606,72 @@ def handle_event(
     if notes:
         summary["config_note"] = truncate(" ".join(notes), limit, secrets)
 
-    mode = resolve_event_mode(event_name, cfg, environ)
+    wait_all = wait_all_settings(cfg, environ)
+    watch = watch_paths_from_env(environ)
     assistant_text = assistant_text_enabled(cfg, environ)
     if event_name == "MessageDisplay" and assistant_text:
         summary["assistant_text"] = "enabled"
-        if mode == "log":
-            mode = "push"
-    watch = watch_paths_from_env(environ)
-    wait_all = wait_all_settings(cfg, environ)
-    if event_name == "SessionStart" and watch and mode == "wait" and not wait_all.get("enabled"):
-        mode = "push"
+    if event_name == "SessionStart" and watch and resolve_event_mode(event_name, cfg, environ) == "wait" and not wait_all.get("enabled"):
         summary["session_start"] = "sync-without-wait"
+    mode = base_mode_for(event_name, cfg, environ)
+    wait = wait_settings(cfg, environ)
+    narrow_hook = narrow_wait_applies(event_name, cfg, environ, wait)
+
+    def ahp_mode(hook: str) -> str:
+        # Appendix A.5: in the AHP tree the narrow wait is an ordinary gate.
+        return "wait" if narrow_wait_applies(hook, cfg, environ, wait) else base_mode_for(hook, cfg, environ)
+
+    # ---- AHP v1 task (spec Appendix A). consumer.json may move the event to another class.
+    task = None
+    ahp_name = ""
+    entry: Optional[dict] = None
+    if ahp_cc is not None and ahp_cc.enabled(environ):
+        ahp_name = ahp_cc.CC_TO_AHP.get(event_name, ("x-cc." + re.sub(r"[^a-z0-9_]", "", event_name.lower()),))[0]
+        task = ahp_cc.Task(
+            task_id_for(event, environ),
+            environ,
+            cfg,
+            rules,
+            notes,
+            ahp_mode,
+            bool(wait_all.get("enabled")),
+            base_timeout_ms(cfg, environ),
+        )
+        entry = task.entry(ahp_name)
+        if entry is not None:
+            mode = ahp_cc.CLASS_TO_MODE[entry["class"]]
+        try:
+            task.sweep_stray_replies()  # spec 7.3 #1, before this event
+        except OSError as exc:
+            stderr += f"cc-cursor-bridge: 无法检查 replies/: {exc}\n"
+    elif AHP_IMPORT_ERROR and env_flag(environ, "CC_BRIDGE_AHP", True):
+        stderr += f"cc-cursor-bridge: AHP 模块不可用，只写旧格式: {AHP_IMPORT_ERROR}\n"
+    legacy = task is None or ahp_cc.legacy_enabled(environ)
+    narrow: Optional[dict] = None
+    if narrow_hook and task is not None and mode == "wait":
+        narrow_id = safe_file_id(str(event.get("tool_use_id") or ""))
+        timeout_decision = wait.get("timeout_decision", "deny")
+        try:
+            narrow_ms = int(max(0.0, float(wait.get("timeout_seconds", 120))) * 1000)
+        except (TypeError, ValueError):
+            narrow_ms = 120_000
+        narrow = {
+            "id": narrow_id,
+            "default": timeout_decision if timeout_decision in ("allow", "deny") else "deny",
+            "timeout_ms": min(narrow_ms, int((entry or {}).get("timeout_ms") or 170_000)),
+            "interval": max(0.02, float(wait.get("poll_interval_seconds", 0.25))),
+            "body": {
+                "id": narrow_id,
+                "event": event_name,
+                "session_id": event.get("session_id") or "",
+                "tool_name": tool_name,
+                "tool_input": pending_input(tool_input, max(limit, 400), secrets),
+                "created_at": local_iso(),
+            },
+        }
+
     if mode == "off" and event_name not in ("PreToolUse", "WorktreeCreate", "WorktreeRemove", "SessionStart"):
-        return HookResult()
+        return HookResult(stderr=stderr)
 
     if event_name == "WorktreeCreate":
         path, error = create_worktree(cwd, str(event.get("name") or "worktree"))
@@ -1438,23 +1683,29 @@ def handle_event(
             stderr = (error or "git worktree add failed") + "\n"
             code = 1
     elif event_name == "WorktreeRemove":
-        code, stderr = remove_worktree(cwd, str(event.get("worktree_path") or ""))
-        if stderr:
-            summary["worktree_error"] = truncate(stderr.strip(), limit, secrets)
+        code, stderr_wt = remove_worktree(cwd, str(event.get("worktree_path") or ""))
+        stderr += stderr_wt
+        if stderr_wt:
+            summary["worktree_error"] = truncate(stderr_wt.strip(), limit, secrets)
 
+    kind, kind_spec = ahp_cc.tool_kind_of(tool_name, cfg) if ahp_cc else ("other", {})
+    norm_command = command or (ahp_cc.shell_command(tool_input, kind_spec) if ahp_cc and kind == "shell" else "")
     ctx = {
         "tool_name": tool_name,
         "tool_input": tool_input,
-        "command": command,
-        "texts": texts_for_rules(tool_name, tool_input, command),
+        "tool_kind": kind,
+        "command": norm_command,
+        "texts": texts_for_rules(tool_name, tool_input, norm_command),
         "cwd": cwd,
         "home": home,
         "rule_errors": [],
     }
+    all_rules = task.rules if task else rules
+    rule_error = ""
     if event_name == "PreToolUse":
-        matched = first_deny(rules, ctx)
+        matched, rule_error = evaluate_rules(all_rules, ctx)
         if matched:
-            # A matching safety rule always denies. wait_all and probe replies cannot override it.
+            # A matching safety rule always denies. Replies, wait_all and probe cannot override it.
             rule_id = str(matched.get("id") or "")
             decision = "deny"
             reason = str(matched.get("reason") or rule_id or "denied")
@@ -1478,17 +1729,64 @@ def handle_event(
         summary["probe"] = "ignored_for_worktree_protocol"
 
     if mode == "off" and event_name == "PreToolUse" and not rule_id and decision != "probe":
-        return HookResult()
+        return HookResult(stderr=stderr)
     if mode == "off" and event_name == "SessionStart" and not watch and decision != "probe":
-        return HookResult()
+        return HookResult(stderr=stderr)
 
     directory = task_dir_for(event, environ)
-    seq = reserve_seq(directory)
-    pending_id = ""
+    if task is not None:
+        task.ensure_capabilities()
+        seq = task.reserve_seq()
+        if legacy:
+            bump_seq(directory, seq)
+    else:
+        seq = reserve_seq(directory)
+
+    # ---- AHP envelope parts
+    ahp_env: Optional[dict] = None
+    ahp_outcome: Dict[str, Any] = {"via": "none"}
+    ahp_ctx: dict = {}
+    ahp_cls = (entry or {}).get("class") or ahp_cc.MODE_TO_CLASS.get(mode, "log") if task else "log"
+    if task is not None:
+        extra: Dict[str, Any] = {}
+        if ahp_name == "tool.pre":
+            extra["tool_kind"] = kind
+            if kind == "shell" and norm_command:
+                extra["command"] = norm_command
+        if event_name == "WorktreeCreate":
+            if summary.get("worktree_path"):
+                extra["worktree_path"] = summary["worktree_path"]
+            elif summary.get("worktree_error"):
+                extra["error"] = summary["worktree_error"]
+        if event_name == "SessionEnd":
+            last = task.last_turn_stop()
+            if last is not None:
+                extra["accepted"] = bool(last.get("accepted"))  # spec 9.3 #4
+        if event_name == "Stop":
+            extra["blocks_used"] = task.stop_blocks()
+            extra["max_blocks"] = task.limits["max_blocks"]
+        ahp_payload = task.shaper.redact(ahp_cc.payload_for(ahp_name, event, extra))
+        ahp_ctx = task.context(event)
+        ahp_env = task.envelope(seq, ahp_name, ahp_cls, ahp_payload, ahp_ctx,
+                                {"event": event_name, "input_keys": sorted(str(k) for k in event.keys())})
+
     push_id = ""
-    summary["channel"] = mode
+    legacy_channel = "log" if narrow else mode
+    summary["channel"] = legacy_channel
     blocked_by_probe = probe_stdout is not None and event_name not in ("WorktreeCreate", "WorktreeRemove")
-    if not rule_id and not blocked_by_probe and mode in ("wait", "push"):
+    ahp_after: List[Tuple[str, dict]] = []
+    if rule_id:
+        ahp_outcome = {"decision": "deny", "via": "rule", "rule_id": rule_id, "reason": reason}
+        ahp_after.append(("policy.deny", {
+            "rule_id": rule_id, "target_event": ahp_name or "tool.pre", "target_seq": seq, "reason": reason,
+            "tool_name": tool_name, "tool_input": tool_input,
+        }))
+        if rule_error:
+            ahp_after.append(("producer.error", {"stage": "rules", "message": rule_error, "target_seq": seq,
+                                                 "applied_decision": "deny"}))
+    elif blocked_by_probe:
+        ahp_outcome = {"via": "none", "reason": "CC_BRIDGE_PROBE"}
+    elif mode in ("wait", "push"):
         body, full_body, was_truncated = notice_body(
             seq,
             event_name,
@@ -1502,57 +1800,45 @@ def handle_event(
             assistant_text=assistant_text,
         )
         if mode == "wait":
-            body["reply_file"] = f"replies/{seq}.json"
-            pending_id = str(seq)
-            write_notice(directory, "pending", seq, event_name, body, full_body, was_truncated)
-            reply, via = poll_reply_file(
-                directory / "replies" / f"{seq}.json",
-                float(wait_all.get("timeout_seconds", 120)),
-                float(wait_all.get("poll_interval_seconds", 0.25)),
+            gate = run_gate(
+                event, event_name, ahp_name, seq, task, entry, ahp_env, directory, legacy, body, full_body,
+                was_truncated, cfg, environ, wait_all, all_rules, ctx, stdout, narrow=narrow,
             )
+            pending_id = narrow["id"] if narrow else str(seq)
+            if narrow:
+                summary["wait"] = gate["delivery"]
+            stdout, decision, reason = gate["stdout"], gate["label"], gate["reason"]
+            ahp_outcome = gate["outcome"]
+            ahp_after.extend(gate["after"])
+            if gate.get("rule_id"):
+                rule_id = gate["rule_id"]
+            if gate.get("stderr"):
+                stderr += gate["stderr"]
             if wait_all.get("enabled"):
-                summary["wait_all"] = via
-            summary["delivery"] = via
-            if reply is None:
-                timed_out, code, extra, decision = timeout_result(event_name)
-                keep_worktree = event_name == "WorktreeCreate" and stdout.strip() and decision in (
-                    "timeout-noop",
-                    "timeout-allow-stop",
-                )
-                if not keep_worktree:
-                    stdout = timed_out
-                if extra:
-                    stderr += extra
-                if decision in ("timeout-deny", "timeout-decline"):
-                    reason = "等待回复超时"
-            elif event_name == "Stop":
-                answered, code, extra, decision, reason = apply_stop_reply(event, reply, directory, cfg, environ)
-                if extra:
-                    stderr += extra
-                stdout = answered
-            else:
-                answered, code, extra, decision = apply_reply(event_name, reply)
-                if extra:
-                    stderr += extra
-                if not (event_name == "WorktreeCreate" and decision != "path"):
-                    stdout = answered
-                reason = str(reply.get("reason") or reply.get("message") or "")
+                summary["wait_all"] = gate["delivery"]
+            summary["delivery"] = gate["delivery"]
+            if gate.get("accepted") is not None:
+                summary["accepted"] = gate["accepted"]
         else:
             push_id = str(seq)
-            write_notice(directory, "push", seq, event_name, body, full_body, was_truncated)
+            if legacy:
+                write_notice(directory, "push", seq, event_name, body, full_body, was_truncated)
+            if task is not None and ahp_env is not None:
+                task.write_notice("push", ahp_env)
             summary["delivery"] = "push"
-    if rule_id:
+    if rule_id and "delivery" not in summary:
         summary["delivery"] = "rule"
 
-    wait = wait_settings(cfg, environ)
     if (
         probe_stdout is None
         and mode == "log"
         and not rule_id
         and should_wait(event_name, wait, decision == "deny")
     ):
+        # Deprecated narrow wait (CC_BRIDGE_WAIT, Appendix A.5) when there is no AHP gate for it
+        # (AHP tree off, or consumer.json moved the event out of gate). Legacy files only.
         pending_id = safe_file_id(str(event.get("tool_use_id") or ""))
-        legacy = {
+        narrow = {
             "id": pending_id,
             "event": event_name,
             "session_id": event.get("session_id") or "",
@@ -1560,25 +1846,42 @@ def handle_event(
             "tool_input": pending_input(tool_input, max(limit, 400), secrets),
             "created_at": local_iso(),
         }
-        decision, reason, via = wait_for_reply(directory, pending_id, legacy, wait)
+        decision, reason, via = wait_for_reply(directory, pending_id, narrow, wait)
         summary["wait"] = via
         summary["delivery"] = via
         stdout = decision_stdout(event_name, decision, reason)
+        ahp_outcome = {"decision": decision, "via": "reply" if via == "reply" else "timeout", "reason": reason}
 
     if "delivery" not in summary:
         summary["delivery"] = mode
+    if event_name == "SessionStart":
+        stdout = inject_watch_paths(stdout, watch)
+
+    if task is not None and ahp_env is not None:
+        if ahp_outcome.get("reason"):
+            ahp_outcome["reason"] = task.shaper.redact_text(str(ahp_outcome["reason"]))[:500]
+        task.record(ahp_env, ahp_outcome)
+        for name, payload in ahp_after:
+            task.notify(name, payload, ahp_ctx)
+        if event_name == "PostToolUse" and tool_name == "TodoWrite":
+            # Appendix A.1: plan.update is synthesized from TodoWrite.
+            plan = {"items": ahp_cc.plan_items(tool_input), "source": "TodoWrite"}
+            if isinstance(event.get("tool_use_id"), str):
+                plan["tool_use_id"] = event["tool_use_id"]
+            task.notify("plan.update", plan, ahp_ctx)
+
+    if not legacy:
+        return HookResult(stdout=stdout, stderr=stderr, code=code)
     record: Dict[str, Any] = {
         "ts": local_iso(),
         "event": event_name,
-        "channel": mode,
+        "channel": legacy_channel,
         "session_id": event.get("session_id") or "",
         "cwd": str(event.get("cwd") or ""),
         "input_keys": sorted(str(key) for key in event.keys()),
         "summary": summary,
         "seq": seq,
     }
-    if event_name == "SessionStart":
-        stdout = inject_watch_paths(stdout, watch)
     if event.get("prompt_id"):
         record["prompt_id"] = str(event["prompt_id"])[:80]
     if decision:
@@ -1606,13 +1909,320 @@ def handle_event(
     return HookResult(stdout=stdout, stderr=stderr, code=code)
 
 
+def run_gate(
+    event: dict,
+    event_name: str,
+    ahp_name: str,
+    seq: int,
+    task: Any,
+    entry: Optional[dict],
+    ahp_env: Optional[dict],
+    directory: Path,
+    legacy: bool,
+    body: dict,
+    full_body: dict,
+    was_truncated: bool,
+    cfg: dict,
+    environ: dict,
+    wait_all: dict,
+    rules: List[dict],
+    ctx: dict,
+    host_stdout: str,
+    narrow: Optional[dict] = None,
+) -> dict:
+    """One gate (spec 4.1, 9): pending, wait, validate, ack, then the CC stdout (Appendix A.2).
+
+    narrow: the deprecated CC_BRIDGE_WAIT gate. The legacy tree then gets only its old
+    pending/<tool_use_id>.json and replies/<tool_use_id>.json; timeout uses wait.timeout_decision.
+    """
+    decisions = list((entry or {}).get("decisions") or ahp_decisions(ahp_name))
+    default = str((entry or {}).get("default_decision") or ahp_default(ahp_name))
+    timeout_ms = int((entry or {}).get("timeout_ms") or min(base_timeout_ms(cfg, environ), 170_000))
+    interval = max(0.02, float(wait_all.get("poll_interval_seconds", 0.25)))
+    if narrow:
+        default = narrow["default"] if narrow["default"] in decisions else default
+        timeout_ms, interval = narrow["timeout_ms"], narrow["interval"]
+    deadline = (datetime.now().astimezone() + timedelta(milliseconds=timeout_ms)).isoformat(timespec="milliseconds")
+
+    body["reply_file"] = f"replies/{seq}.json"
+    body["deadline"] = deadline
+    body["timeout_ms"] = timeout_ms
+    body["default_decision"] = default
+    paths: List[Path] = []
+    if task is not None and ahp_env is not None:
+        ahp_env.update({"reply_file": f"replies/{seq}.json", "deadline": deadline, "timeout_ms": timeout_ms,
+                        "decisions": decisions, "default_decision": default})
+        ahp_cc.ensure_dir(task.dir / "replies")
+        task.write_notice("pending", ahp_env)
+        paths.append(task.dir / "replies" / f"{seq}.json")
+    if legacy and narrow:
+        write_atomic(directory / "pending" / f"{narrow['id']}.json",
+                     json.dumps(narrow["body"], ensure_ascii=False, indent=2) + "\n")
+        paths.append(directory / "replies" / f"{narrow['id']}.json")
+    elif legacy:
+        full_body.update({k: body[k] for k in ("reply_file", "deadline", "timeout_ms", "default_decision")})
+        write_notice(directory, "pending", seq, event_name, body, full_body, was_truncated)
+        paths.append(directory / "replies" / f"{seq}.json")
+
+    data, error, sha, found = poll_replies(paths, timeout_ms / 1000.0, interval)
+    after: List[Tuple[str, dict]] = []
+    ack: Dict[str, Any] = {}
+    reply: Optional[dict] = None
+    if found is None:
+        status, via, applied, why = "expired", "timeout", default, "等待回复超时"
+        delivery = "timeout"
+    else:
+        errors = [error] if error else []
+        if not errors:
+            limit = task.limits["max_additional_context_chars"] if task is not None else 10_000
+            reply, errors = _normalize(data, seq, ahp_name, decisions, limit)
+        if errors:
+            status, via, applied = "invalid", "invalid_reply", default
+            why = "回复无效: " + "; ".join(errors)
+            ack["errors"] = errors[:10]
+            delivery = "invalid"
+            after.append(("producer.error", {"stage": "reply", "message": "; ".join(errors)[:500],
+                                             "target_seq": seq, "applied_decision": default}))
+        else:
+            status, via, applied = "consumed", "reply", str(reply["decision"])
+            why = str(reply.get("reason") or "")
+            delivery = "reply"
+    if sha:
+        ack["reply_sha256"] = sha
+    if found is not None and task is not None and found.parent.parent != task.dir:
+        ack.setdefault("reason", "reply read from the legacy task dir (Appendix A.5)")
+
+    outcome: Dict[str, Any] = {}
+    rule_hit = ""
+    label = ""
+    accepted: Optional[bool] = None
+    if (
+        reply is not None
+        and applied == "allow"
+        and ahp_name in ("tool.pre", "permission.request")
+        and isinstance(reply.get("updated_input"), dict)
+    ):
+        # Spec 7.1 / 13.5: the rewritten input goes through the static rules again.
+        new_input = reply["updated_input"]
+        new_command = new_input.get("command") if isinstance(new_input.get("command"), str) else ""
+        if not new_command and ctx.get("tool_kind") == "shell" and ahp_cc:
+            new_command = ahp_cc.shell_command(new_input, ahp_cc.tool_kind_of(ctx["tool_name"], cfg)[1])
+        rectx = dict(ctx, tool_input=new_input, command=new_command, rule_errors=[],
+                     texts=texts_for_rules(ctx["tool_name"], new_input, new_command))
+        hit, _ = evaluate_rules(rules, rectx)
+        if hit is not None:
+            rule_hit = str(hit.get("id") or "")
+            applied, via = "deny", "rule"
+            why = f"updated_input 命中规则 {rule_hit}: {hit.get('reason') or ''}".strip()
+            after.append(("policy.deny", {"rule_id": rule_hit, "target_event": ahp_name, "target_seq": seq,
+                                          "reason": str(hit.get("reason") or rule_hit), "tool_name": ctx["tool_name"],
+                                          "tool_input": new_input}))
+        else:
+            outcome["updated_input"] = new_input
+    if event_name == "Stop" or ahp_name == "subagent.stop":
+        limit = task.limits["max_blocks"] if task is not None else stop_block_limit(cfg, environ)
+        if applied == "block":
+            used = task.stop_blocks() if task is not None else read_stop_blocks(directory)
+            if used >= limit:
+                applied, via = "ack", "rule"
+                why = f"已阻断 {used} 次，达到上限 {limit}，放行结束"
+                label = "stop-block-cap"
+                accepted = False
+            else:
+                if task is not None:
+                    task.stop_blocks(increment=True)
+                if legacy:
+                    increment_stop_blocks(directory)
+        else:
+            accepted = status == "consumed" and applied == "ack"
+            if accepted and event.get("stop_hook_active"):
+                label = "stop-hook-active"
+        if ahp_name != "turn.stop":
+            accepted = None
+    ack.update(status=status, via=via, applied_decision=applied)
+    if accepted is not None:
+        ack["accepted"] = accepted
+    if via in ("rule", "timeout", "invalid_reply") or (via == "reply" and why):
+        ack["reason"] = why
+    if task is not None:
+        task.write_ack(seq, ack)  # spec 9.4: the ack is written before the decision is carried out
+        if accepted is not None:
+            task.remember_turn_stop(seq, accepted)
+
+    if status == "consumed" and via == "reply":
+        cc_reply = to_cc_reply(reply or {})
+    else:
+        cc_reply = {"decision": applied, "reason": why}
+    answered, _, _, cc_label = apply_reply(event_name, cc_reply)
+    if event_name == "WorktreeCreate" and cc_label != "path":
+        answered = host_stdout
+    if not label:
+        label = cc_label if via == "reply" else ("deny" if via == "rule" else default_label(event_name, applied, via))
+    outcome.update(decision=applied, via=via)
+    if why:
+        outcome["reason"] = why
+    if rule_hit:
+        outcome["rule_id"] = rule_hit
+    return {"stdout": answered, "label": label, "reason": why, "outcome": outcome, "after": after,
+            "delivery": delivery, "accepted": accepted, "rule_id": rule_hit, "stderr": ""}
+
+
+def ahp_decisions(name: str) -> List[str]:
+    return list(ahp_cc.DECISIONS.get(name, ["ack"])) if ahp_cc else list(_FALLBACK_DECISIONS.get(name, ["ack"]))
+
+
+def ahp_default(name: str) -> str:
+    return ahp_cc.DEFAULT_DECISION.get(name, "ack") if ahp_cc else _FALLBACK_DEFAULT.get(name, "ack")
+
+
+_FALLBACK_DECISIONS = {"tool.pre": ["allow", "deny", "ask"], "permission.request": ["allow", "deny"],
+                       "input.request": ["accept", "decline"], "turn.stop": ["ack", "block"]}
+_FALLBACK_DEFAULT = {"tool.pre": "deny", "permission.request": "deny", "input.request": "decline",
+                     "turn.stop": "ack"}
+_FALLBACK_NAMES = {"PreToolUse": "tool.pre", "PermissionRequest": "permission.request",
+                   "Elicitation": "input.request", "Stop": "turn.stop"}
+GATE_HOOKS = ("PreToolUse", "PermissionRequest", "Elicitation", "Stop")
+
+
+def bump_seq(task_dir: Path, seq: int) -> None:
+    """Keep the legacy seq file at least at the shared seq (the AHP counter owns numbering)."""
+    task_dir.mkdir(parents=True, exist_ok=True)
+    path = task_dir / "seq"
+    with path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            handle.seek(0)
+            raw = handle.read().strip()
+            current = int(raw) if raw.isdigit() else 0
+            if seq > current:
+                handle.seek(0)
+                handle.truncate()
+                handle.write(str(seq))
+                handle.flush()
+                os.fsync(handle.fileno())
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def sniff_hook_name(raw: str) -> str:
+    match = re.search(r'"hook_event_name"\s*:\s*"([A-Za-z]+)"', raw or "")
+    return match.group(1) if match else ""
+
+
+def fail_closed(environ: dict, event: Optional[dict], message: str, hook_hint: str = "", stage: str = "gate") -> HookResult:
+    """Spec 9.1 / A.3: a producer failure on a gate applies the default decision, never CC's own flow.
+
+    PreToolUse/PermissionRequest -> explicit deny, Elicitation -> decline, Stop -> end the turn
+    (exit 0, empty stdout, ack accepted:false). Unknown hook -> exit 2.
+    """
+    environ = dict(environ)
+    event = event if isinstance(event, dict) else {}
+    hook = str(event.get("hook_event_name") or hook_hint or "")
+    stderr = f"cc-cursor-bridge: {message}\n"
+    if not hook:
+        return HookResult(stderr=stderr + "cc-cursor-bridge: 无法确定 hook 事件，exit 2\n", code=2)
+    name = ""
+    cls = "gate" if hook in GATE_HOOKS else "log"
+    caps_entry: dict = {}
+    task_dir: Optional[Path] = None
+    try:
+        if ahp_cc is not None:
+            name = ahp_cc.CC_TO_AHP.get(hook, ("",))[0]
+            if ahp_cc.enabled(environ):
+                task_dir = ahp_cc.ahp_root(environ) / "tasks" / task_id_for(event, environ)
+                caps = ahp_cc.read_json(task_dir / "capabilities.json") if (task_dir / "capabilities.json").is_file() else {}
+                caps_entry = ((caps.get("events") or {}).get(name) or {}) if isinstance(caps, dict) else {}
+                cls = caps_entry.get("class") or cls
+        else:
+            name = _FALLBACK_NAMES.get(hook, "")
+    except Exception:  # noqa: BLE001 - the error path must not fail
+        pass
+    if cls != "gate":
+        return HookResult(stderr=stderr)
+    default = str(caps_entry.get("default_decision") or ahp_default(name))
+    reason = f"cc-cursor-bridge 内部错误，按默认决定 {default} 处理: {message}"[:400]
+    try:
+        stdout, _, _, _ = apply_reply(hook, {"decision": default, "reason": reason})
+    except Exception:  # noqa: BLE001
+        stdout = _EMERGENCY_STDOUT.get(hook, "")
+    code = 1 if hook == "WorktreeCreate" else 0
+    try:
+        _record_failure(environ, event, hook, name, default, message, stage, task_dir)
+    except Exception as exc:  # noqa: BLE001
+        stderr += f"cc-cursor-bridge: 无法记录失败: {exc}\n"
+    return HookResult(stdout=stdout, stderr=stderr, code=code)
+
+
+def _record_failure(environ: dict, event: dict, hook: str, name: str, default: str, message: str, stage: str,
+                    task_dir: Optional[Path]) -> None:
+    secrets = secret_values(environ)
+    if ahp_cc is not None and task_dir is not None and name:
+        root = plugin_root_from(environ)
+        try:
+            rules, _ = load_rules(root, environ)
+            cfg, _ = load_config(root, environ)
+        except Exception:  # noqa: BLE001
+            rules, cfg = default_rules(), default_config()
+        task = ahp_cc.Task(task_dir.name, environ, cfg, rules, [], lambda h: base_mode_for(h, cfg, environ),
+                           False, base_timeout_ms(cfg, environ))
+        task.ensure_capabilities()
+        seq = task.reserve_seq()
+        ack: Dict[str, Any] = {"status": "expired", "via": "error", "applied_decision": default,
+                               "reason": message[:400]}
+        if name == "turn.stop":
+            ack["accepted"] = False
+        task.write_ack(seq, ack)
+        if name == "turn.stop":
+            task.remember_turn_stop(seq, False)
+        payload = task.shaper.redact(ahp_cc.payload_for(name, event)) if event else {"x-unparsed_input": True}
+        if not event:
+            payload = task.shaper.redact(ahp_cc.payload_for(name, {}))
+        ctx = task.context(event)
+        env = task.envelope(seq, name, "gate", payload, ctx, {"event": hook, "input_keys": sorted(str(k) for k in event)})
+        task.record(env, {"decision": default, "via": "error", "reason": task.shaper.redact_text(message)[:400]})
+        task.notify("producer.error", {"stage": stage, "message": task.shaper.redact_text(message)[:500],
+                                       "target_seq": seq, "applied_decision": default}, ctx)
+        if not ahp_cc.legacy_enabled(environ):
+            return
+        legacy_seq = seq
+        directory = task_dir_for(event, environ)
+        bump_seq(directory, seq)
+    else:
+        directory = task_dir_for(event, environ)
+        legacy_seq = reserve_seq(directory)
+    record = {
+        "ts": local_iso(),
+        "event": hook,
+        "channel": "wait",
+        "session_id": event.get("session_id") or "",
+        "cwd": str(event.get("cwd") or ""),
+        "input_keys": sorted(str(key) for key in event.keys()),
+        "summary": {"error": truncate(message, 240, secrets), "delivery": "error"},
+        "seq": legacy_seq,
+        "decision": default_label(hook, default, "error"),
+        "decision_reason": truncate(message, 240, secrets),
+    }
+    append_record(directory / "events.jsonl", record, None)
+
+
+_EMERGENCY_STDOUT = {
+    "PreToolUse": json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                     "permissionDecisionReason": "cc-cursor-bridge internal error"}}) + "\n",
+    "PermissionRequest": json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest",
+                                                            "decision": {"behavior": "deny",
+                                                                         "message": "cc-cursor-bridge internal error"}}}) + "\n",
+    "Elicitation": json.dumps({"hookSpecificOutput": {"hookEventName": "Elicitation", "action": "decline"}}) + "\n",
+}
+
+
 def bridge_root_from_env() -> Path:
     return Path(os.environ.get("CC_BRIDGE_DIR") or (Path.home() / ".cc-bridge")).expanduser()
 
 
 USAGE = (
     "usage: bridge.py pending <task> | reply <task> <seq> <json> "
-    "| push <task> [--since <seq>] | watch <task> [--once | --for <seconds>]\n"
+    "| push <task> [--since <seq>] | watch <task> [--once | --for <seconds>]  "
+    "(add --ahp for the AHP v1 tree)\n"
 )
 
 
@@ -1688,15 +2298,77 @@ def write_push_cursor(task_dir: Path, seq: int) -> None:
     write_atomic(task_dir / "push" / "cursor", str(seq) + "\n")
 
 
+def use_ahp_tree(argv: List[str]) -> Tuple[bool, List[str]]:
+    """--ahp (or CC_BRIDGE_LEGACY=0) switches pending/push/watch/reply to the AHP v1 tree."""
+    rest = [a for a in argv if a != "--ahp"]
+    wanted = len(rest) != len(argv)
+    if ahp_cc is not None and not ahp_cc.legacy_enabled(dict(os.environ)):
+        wanted = True
+    return wanted, rest
+
+
+def ahp_task_root(task: str) -> Path:
+    if ahp_cc is None:
+        raise RuntimeError(f"AHP module unavailable: {AHP_IMPORT_ERROR}")
+    return ahp_cc.ahp_root(dict(os.environ)) / "tasks" / task
+
+
+def ahp_notice_line(path: Path, kind: str = "") -> str:
+    """Same path-first TAB shape as the legacy lines; the annotation reads AHP payload names."""
+    line = f"{kind} {path}" if kind else str(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        payload = data.get("payload") or {}
+        text = ""
+        for key, label in (("last_assistant_message", "reply"), ("text", "assistant"),
+                           ("tool_response", "response"), ("error", "error"), ("reason", "reason")):
+            value = field_text(payload.get(key)) if isinstance(payload, dict) else ""
+            if value:
+                text = f"{label}: {first_line(value)}"
+                break
+        if not text and isinstance(payload, dict) and payload.get("tool_name"):
+            text = f"{data.get('event')}: {payload.get('tool_name')}"
+        elif not text:
+            text = str(data.get("event") or "")
+        return line + (f"\t# {text}" if text else "")
+    except (OSError, ValueError, AttributeError):
+        return line
+
+
+def ahp_open_pending(root: Path) -> List[Path]:
+    out = []
+    for path in short_notices(root / "pending"):
+        seq = notice_seq(path)
+        if (root / "replies" / f"{seq}.json").exists() or (root / "acks" / f"{seq}.json").exists():
+            continue
+        out.append(path)
+    return out
+
+
+def find_pending(root: Path, seq: str) -> Optional[dict]:
+    for path in short_notices(root / "pending"):
+        if path.name.split("-", 1)[0] == seq:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return data if isinstance(data, dict) else None
+            except (OSError, json.JSONDecodeError):
+                return None
+    return None
+
+
 def cli(argv: List[str]) -> HookResult:
-    if not argv or argv[0] not in ("pending", "reply", "push", "watch"):
+    if not argv or argv[0] not in CLI_COMMANDS:
         return HookResult(stderr=USAGE, code=2)
+    ahp, argv = use_ahp_tree(argv)
     if argv[0] == "pending":
         if len(argv) != 2:
-            return HookResult(stderr="usage: bridge.py pending <task>\n", code=2)
+            return HookResult(stderr="usage: bridge.py pending <task> [--ahp]\n", code=2)
         task = safe_component(argv[1]) or ""
         if not task:
             return HookResult(stderr="bad task id\n", code=2)
+        if ahp:
+            lines = [ahp_notice_line(path) for path in ahp_open_pending(ahp_task_root(task))]
+            return HookResult(stdout=("\n".join(lines) + ("\n" if lines else "")))
         root = task_root(task)
         lines = []
         for path in short_notices(root / "pending"):
@@ -1705,11 +2377,11 @@ def cli(argv: List[str]) -> HookResult:
                 lines.append(notice_line(path))
         return HookResult(stdout=("\n".join(lines) + ("\n" if lines else "")))
     if argv[0] == "push":
-        return push_command(argv[1:])
+        return push_command(argv[1:], ahp)
     if argv[0] == "watch":
-        return watch_command(argv[1:])
+        return watch_command(argv[1:], ahp)
     if len(argv) != 4:
-        return HookResult(stderr="usage: bridge.py reply <task> <seq> <json>\n", code=2)
+        return HookResult(stderr="usage: bridge.py reply <task> <seq> <json> [--ahp]\n", code=2)
     task = safe_component(argv[1]) or ""
     if not task or not argv[2].isdigit():
         return HookResult(stderr="bad task id or seq\n", code=2)
@@ -1719,15 +2391,61 @@ def cli(argv: List[str]) -> HookResult:
         return HookResult(stderr=f"reply is not JSON: {exc}\n", code=2)
     if not isinstance(payload, dict):
         return HookResult(stderr="reply JSON must be an object\n", code=2)
-    dest = task_root(task) / "replies" / f"{argv[2]}.json"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    temporary = dest.with_suffix(".tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
-    temporary.replace(dest)
-    return HookResult(stdout=str(dest) + "\n")
+    seq = int(argv[2])
+    stderr = ""
+    reply: Optional[dict] = None
+    if ahp_cc is not None:
+        # Validate exactly like the hook will (spec 6), so a bad reply fails here, not at the gate.
+        aroot = ahp_task_root(task)
+        name, decisions = "", []
+        pending = find_pending(aroot, argv[2])
+        if pending is not None:
+            name = str(pending.get("event") or "")
+            decisions = list(pending.get("decisions") or ahp_decisions(name))
+        else:
+            legacy_pending = find_pending(task_root(task), argv[2])
+            if legacy_pending is not None:
+                name = ahp_cc.CC_TO_AHP.get(str(legacy_pending.get("event") or ""), ("",))[0]
+                decisions = ahp_decisions(name) if name else []
+        try:
+            caps = json.loads((aroot / "capabilities.json").read_text(encoding="utf-8"))
+            limit = int((caps.get("limits") or {}).get("max_additional_context_chars") or ahp_cc.CC_CONTEXT_CAP)
+        except (OSError, ValueError, AttributeError):
+            limit = ahp_cc.CC_CONTEXT_CAP
+        if name:
+            reply, errors = ahp_cc.normalize_reply(payload, seq, name, decisions, limit)
+        else:
+            # No pending to check against: only the event-independent rules apply.
+            every = sorted({d for ds in ahp_cc.DECISIONS.values() for d in ds} | {"defer"})
+            _, errors = ahp_cc.normalize_reply(payload, seq, "tool.pre", every)
+            errors = [e for e in errors if not e.startswith(("updated_input only", "content only"))]
+            reply = None
+        if errors:
+            return HookResult(stderr="invalid reply: " + "; ".join(errors) + "\n", code=2)
+        if (aroot / "acks" / f"{seq}.json").exists():
+            stderr += f"warning: seq {seq} already has an ack; the reply will not be read\n"
+    if ahp:
+        dest = ahp_task_root(task) / "replies" / f"{seq}.json"
+        body = dict(reply or payload)
+        body.setdefault("protocol", "ahp/1")
+        body.setdefault("seq", seq)
+    else:
+        dest = task_root(task) / "replies" / f"{seq}.json"
+        body = payload
+    text = json.dumps(body, ensure_ascii=False) + "\n"
+    if dest.exists():
+        try:
+            same = json.loads(dest.read_text(encoding="utf-8")) == body
+        except (OSError, json.JSONDecodeError):
+            same = False
+        if same:
+            return HookResult(stdout=str(dest) + "\n", stderr=stderr)
+        return HookResult(stderr=f"a different reply already exists: {dest}\n", code=2)
+    write_atomic(dest, text)
+    return HookResult(stdout=str(dest) + "\n", stderr=stderr)
 
 
-def push_command(argv: List[str]) -> HookResult:
+def push_command(argv: List[str], ahp: bool = False) -> HookResult:
     since: Optional[int] = None
     task = ""
     index = 0
@@ -1746,17 +2464,23 @@ def push_command(argv: List[str]) -> HookResult:
     task = safe_component(task) or ""
     if not task:
         return HookResult(stderr="usage: bridge.py push <task> [--since <seq>]\n", code=2)
-    root = task_root(task)
-    cursor = read_push_cursor(root)
+    root = ahp_task_root(task) if ahp else task_root(task)
+    cursor_file = root / "consumer" / "push-cursor" if ahp else root / "push" / "cursor"
+    try:
+        raw = cursor_file.read_text(encoding="utf-8").strip()
+        cursor = int(raw) if raw.isdigit() else 0
+    except OSError:
+        cursor = 0
     floor = since if since is not None else cursor
     chosen = [path for path in short_notices(root / "push") if notice_seq(path) > floor]
     if chosen:
-        write_push_cursor(root, max(cursor, max(notice_seq(path) for path in chosen)))
-    text = "\n".join(notice_line(path) for path in chosen)
+        write_atomic(cursor_file, str(max(cursor, max(notice_seq(path) for path in chosen))) + "\n")
+    line_of = ahp_notice_line if ahp else notice_line
+    text = "\n".join(line_of(path) for path in chosen)
     return HookResult(stdout=text + ("\n" if text else ""))
 
 
-def watch_command(argv: List[str]) -> HookResult:
+def watch_command(argv: List[str], ahp: bool = False) -> HookResult:
     once = False
     seconds: Optional[float] = None
     task = ""
@@ -1783,7 +2507,8 @@ def watch_command(argv: List[str]) -> HookResult:
     task = safe_component(task) or ""
     if not task:
         return HookResult(stderr="usage: bridge.py watch <task> [--once | --for <seconds>]\n", code=2)
-    root = task_root(task)
+    root = ahp_task_root(task) if ahp else task_root(task)
+    line_of = ahp_notice_line if ahp else notice_line
     seen = set()
     deadline = None if seconds is None else time.monotonic() + max(0.0, seconds)
     lines: List[str] = []
@@ -1794,7 +2519,9 @@ def watch_command(argv: List[str]) -> HookResult:
             for path in short_notices(folder):
                 if kind == "pending" and (replies / f"{notice_seq(path)}.json").is_file():
                     continue
-                key = notice_line(path, kind)
+                if kind == "pending" and ahp and (root / "acks" / f"{notice_seq(path)}.json").is_file():
+                    continue
+                key = line_of(path, kind)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -1811,17 +2538,39 @@ def watch_command(argv: List[str]) -> HookResult:
     return HookResult(stdout="")
 
 
+CLI_COMMANDS = ("pending", "reply", "push", "watch")
+
+
 def main() -> HookResult:
-    if len(sys.argv) > 1 and sys.argv[1] in ("pending", "reply", "push", "watch"):
+    """Hook entry. argv[1] may carry the hook name (hooks.json passes it) so bad stdin still fails closed."""
+    global CURRENT_EVENT
+    CURRENT_EVENT = None
+    if len(sys.argv) > 1 and sys.argv[1] in CLI_COMMANDS:
         return cli(sys.argv[1:])
+    hint = sys.argv[1] if len(sys.argv) > 1 and re.fullmatch(r"[A-Za-z]+", sys.argv[1]) else ""
     raw = sys.stdin.read()
+    hook = hint or sniff_hook_name(raw)
     if not raw.strip():
+        if hook in GATE_HOOKS:
+            return fail_closed(dict(os.environ), {"hook_event_name": hook}, "stdin 为空", hook, stage="input")
         return HookResult()
     try:
         event = json.loads(raw)
     except json.JSONDecodeError as exc:
-        return HookResult(stderr=f"cc-cursor-bridge: 无法解析 stdin JSON: {exc}\n")
-    return handle_event(event)
+        message = f"无法解析 stdin JSON: {exc}"
+        if not hook:
+            return HookResult(stderr=f"cc-cursor-bridge: {message}\n", code=2)
+        return fail_closed(dict(os.environ), {"hook_event_name": hook}, message, hook, stage="input")
+    if not isinstance(event, dict):
+        if not hook:
+            return HookResult(stderr="cc-cursor-bridge: stdin 不是 JSON 对象\n", code=2)
+        return fail_closed(dict(os.environ), {"hook_event_name": hook}, "stdin 不是 JSON 对象", hook, stage="input")
+    if hint and not event.get("hook_event_name"):
+        event["hook_event_name"] = hint
+    try:
+        return handle_event(event)
+    except Exception as exc:  # noqa: BLE001 - spec 9.1: producer errors fail closed on gates
+        return fail_closed(dict(os.environ), event, f"{type(exc).__name__}: {exc}", hook, stage="internal")
 
 
 if __name__ == "__main__":

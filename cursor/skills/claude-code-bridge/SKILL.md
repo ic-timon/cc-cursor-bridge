@@ -134,7 +134,7 @@ python3 /path/to/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
 
 PreToolUse 回 `allow` 会让这次工具调用跳过权限提示。只在你看过完整命令和路径之后才 allow。
 
-旧的窄等待仍然可用，但只在该事件的模式是 `log` 时生效：`CC_BRIDGE_WAIT=1` 等 PermissionRequest，`CC_BRIDGE_WAIT_PRE_TOOL=1` 再加 PreToolUse。文件名是 `pending/<id>.json`，不是 seq。
+旧的窄等待仍然可用，但只在该事件的模式是 `log` 时生效：`CC_BRIDGE_WAIT=1` 等 PermissionRequest，`CC_BRIDGE_WAIT_PRE_TOOL=1` 再加 PreToolUse。旧目录里文件名是 `pending/<id>.json`，不是 seq；AHP 目录里它是普通 gate（`pending/<seq>-<事件>.json`，可用 `--ahp` 回复）。回复不合法时立即 deny。
 
 notifier 默认关，而且当前版本即使打开也只把打算发给 Cursor Cloud Agents API 的 followup 写到 `outbox/`，不发 HTTP。API key 只从环境变量 `CC_BRIDGE_CURSOR_API_KEY` 读取，禁止写进仓库、命令行回显或事件日志。
 
@@ -148,10 +148,21 @@ notifier 默认关，而且当前版本即使打开也只把打算发给 Cursor 
 
 没写 pending 回复之前，进程会停在 PreToolUse、PermissionRequest、Elicitation 或 Stop 上。push 和 log 不挡进程。
 
+## AHP v1（0.2.0 起）
+
+- 旧目录、旧命令、旧回复写法都照旧可用，你的循环不用改。
+- 同一批事件也写在 `$CC_BRIDGE_DIR/ahp/tasks/$CC_TASK_ID/`（AHP v1）。命令加 `--ahp` 就读写那边：`pending --ahp`、`reply ... --ahp`、`push --ahp`、`watch --ahp`。旧目录的 seq 可能有空号（AHP 独有的 `policy.deny`、`producer.error`、`plan.update` 也占号）。
+- 每个等待项结束后，`ahp/tasks/<task>/acks/<seq>.json` 写明实际执行了什么（`status`、`via`、`applied_decision`，Stop 还有 `accepted`）。不确定回复有没有生效，就看 ack。
+- 回复不合法时按默认决定处理，不会放行：PreToolUse/PermissionRequest deny，Elicitation decline，Stop 结束本轮。`reply` 会先校验，不合法 exit 2、什么都不写；看 stderr 改了再写。Stop 的 `block` 一定要带 `reason`。
+- `updatedInput` 改写的命令会重跑危险规则，命中仍然 deny。
+- `additionalContext` 只在等待项（pending）的回复里有效，最长 10,000 字符；超了整条回复作废（不截断），按默认决定处理。对 push 通知写回复没有用。Stop 的回复不能带 `additionalContext`。
+- hook 自己出错也按默认决定处理（fail-closed）。看 `ahp/.../push/*-producer.error.json`。
+
 ## 出错怎么办
 
 - 任务目录或 `events.jsonl` 一直没有：`--plugin-dir` 没指到插件根，或 hook 找不到 `python3`。用 `--debug-file <日志> --debug=hooks` 重跑一次，看 hook 的 stderr。
 - 流里出现 hook error：分发脚本把非 JSON 打到了 stdout，或脚本崩了。事件日志的 `summary.config_note` 会写配置回退。
 - `StopFailure`：这一轮是 API 错误。看 `summary.error`，不要改用户的代理配置。
 - pending 超时：插件已经按默认 deny。要重试就再跑一轮，或在超时前写入 reply。
+- 回复写了但被当成无效：看 `ahp/tasks/<task>/acks/<seq>.json` 的 `errors`。常见原因：拼错字段、`decision` 不在允许范围、Stop `block` 没有 `reason`。
 - 工作区不是 git 仓库时，`WorktreeCreate` 会失败。这个 hook 替换了 Claude Code 自带的 worktree 行为，脚本自己执行 `git worktree add`，分支名是 `cc-bridge/<slug>`。
