@@ -1,0 +1,153 @@
+{
+  "id": "gate-replies",
+  "title": "valid replies are applied and acked as consumed",
+  "source": [
+    "test_bridge.py::test_wait_reply_and_timeout",
+    "test_bridge.py::test_wait_all_reply_and_timeout"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "ls"
+        }
+      }
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "make"
+        }
+      }
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "python3 x.py"
+        }
+      }
+    },
+    {
+      "event": "permission.request",
+      "payload": {
+        "tool_name": "Write",
+        "tool_input": {
+          "file_path": "/p/a.py",
+          "content": "x"
+        }
+      }
+    },
+    {
+      "event": "input.request",
+      "payload": {
+        "server": "demo",
+        "message": "env?",
+        "mode": "form",
+        "requested_schema": {
+          "type": "object"
+        }
+      }
+    },
+    {
+      "event": "turn.stop",
+      "payload": {
+        "last_assistant_message": "all tests pass",
+        "stop_active": false
+      }
+    }
+  ],
+  "consumer": [
+    {
+      "match": {
+        "event": "tool.pre",
+        "nth": 1
+      },
+      "action": "allow",
+      "reason": "read only"
+    },
+    {
+      "match": {
+        "event": "tool.pre",
+        "nth": 2
+      },
+      "action": "deny",
+      "reason": "no builds"
+    },
+    {
+      "match": {
+        "event": "tool.pre",
+        "nth": 3
+      },
+      "action": "ask",
+      "reason": "human"
+    },
+    {
+      "match": {
+        "event": "permission.request"
+      },
+      "action": "allow",
+      "reason": "repo file"
+    },
+    {
+      "match": {
+        "event": "input.request"
+      },
+      "action": "accept",
+      "content": {
+        "env": "staging"
+      }
+    },
+    {
+      "match": {
+        "event": "turn.stop"
+      },
+      "action": "ack",
+      "reason": "verified"
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "allow",
+      "ack": "consumed"
+    },
+    {
+      "step": 1,
+      "effect": "deny",
+      "ack": "consumed"
+    },
+    {
+      "step": 2,
+      "effect": "ask",
+      "ack": "consumed"
+    },
+    {
+      "step": 3,
+      "effect": "allow",
+      "ack": "consumed"
+    },
+    {
+      "step": 4,
+      "effect": "accept",
+      "ack": "consumed"
+    },
+    {
+      "step": 5,
+      "effect": "ack",
+      "ack": "consumed",
+      "accepted": true
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "protocol": "ahp/1",
+  "task_id": "demo-bridge-snapshot",
+  "seq": 14,
+  "event": "tool.pre",
+  "class": "gate",
+  "producer": {
+    "name": "cc-cursor-bridge",
+    "version": "9f478f8",
+    "host": {
+      "name": "claude-code"
+    }
+  },
+  "ts": "2026-10-22T01:27:26.697+08:00",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "python3 -m unittest -v test_calc",
+      "description": "Run unittest suite verbosely"
+    },
+    "tool_use_id": "call_00_ET_VVW8NMVhMA387GVz9Dw93084"
+  },
+  "context": {
+    "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+    "cwd": "/private/tmp/ccb-demo2-woqt"
+  },
+  "native": {
+    "event": "PreToolUse",
+    "input_keys": [
+      "cwd",
+      "hook_event_name",
+      "permission_mode",
+      "prompt_id",
+      "session_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id",
+      "transcript_path"
+    ]
+  },
+  "reply_file": "replies/14.json",
+  "deadline": "2026-10-22T01:29:26.697+08:00",
+  "timeout_ms": 120000,
+  "decisions": [
+    "allow",
+    "deny",
+    "ask"
+  ],
+  "default_decision": "deny"
+}

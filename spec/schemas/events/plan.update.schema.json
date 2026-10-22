@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ahp.invalid/schemas/1/events/plan.update.schema.json",
+  "title": "plan.update payload (notify)",
+  "type": "object",
+  "required": [
+    "items"
+  ],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "content",
+          "status"
+        ],
+        "properties": {
+          "content": {
+            "$ref": "../common.schema.json#/$defs/text"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed",
+              "cancelled"
+            ]
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "source": {
+      "type": "string",
+      "description": "e.g. TodoWrite (CC) or todo/write (RINO)."
+    }
+  },
+  "additionalProperties": true,
+  "description": "The agent's plan / todo list changed. Full list each time, not a diff."
+}

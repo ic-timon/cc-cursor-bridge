@@ -1,0 +1,6 @@
+{
+  "protocol": "ahp/1",
+  "seq": 18,
+  "decision": "block",
+  "reason": "补一个 add('a', 1) 抛 TypeError 的测试再跑"
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ahp.invalid/schemas/1/events/subagent.stop.schema.json",
+  "title": "subagent.stop payload",
+  "type": "object",
+  "required": [
+    "agent_id"
+  ],
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "last_assistant_message": {
+      "$ref": "../common.schema.json#/$defs/text"
+    },
+    "agent_transcript_path": {
+      "type": "string"
+    },
+    "stop_active": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": true
+}

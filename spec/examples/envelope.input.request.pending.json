@@ -1,0 +1,53 @@
+{
+  "protocol": "ahp/1",
+  "task_id": "demo-bridge-snapshot",
+  "seq": 21,
+  "event": "input.request",
+  "class": "gate",
+  "producer": {
+    "name": "cc-cursor-bridge",
+    "version": "ahp-adapter-draft",
+    "host": {
+      "name": "claude-code",
+      "version": "2.1.306"
+    }
+  },
+  "ts": "2026-10-22T01:30:00.000+08:00",
+  "payload": {
+    "server": "demo-mcp",
+    "message": "Which environment should I deploy to?",
+    "mode": "form",
+    "requested_schema": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "enum": [
+            "staging",
+            "prod"
+          ]
+        }
+      },
+      "required": [
+        "env"
+      ]
+    }
+  },
+  "context": {
+    "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+    "cwd": "/private/tmp/ccb-demo2-woqt",
+    "transcript_path": "/Users/timon/.claude/projects/-private-tmp-ccb-demo2-woqt/c3233cdc-54f0-49fc-be19-21f5b86a66fd.jsonl",
+    "prompt_id": "ae7e0386-efda-495b-b65e-70f711d9946c",
+    "permission_mode": "acceptEdits"
+  },
+  "native": {
+    "event": "Elicitation"
+  },
+  "reply_file": "replies/21.json",
+  "deadline": "2026-10-22T01:32:00.000+08:00",
+  "timeout_ms": 120000,
+  "decisions": [
+    "accept",
+    "decline"
+  ],
+  "default_decision": "decline"
+}

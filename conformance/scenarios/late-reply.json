@@ -1,0 +1,59 @@
+{
+  "id": "late-reply",
+  "title": "a reply after the deadline is not applied; ack says expired",
+  "source": [
+    "spec 9.4"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "ls"
+        }
+      }
+    },
+    {
+      "event": "turn.stop",
+      "payload": {
+        "last_assistant_message": "done",
+        "stop_active": false
+      }
+    }
+  ],
+  "consumer": [
+    {
+      "match": {
+        "event": "tool.pre"
+      },
+      "action": "late",
+      "decision": "allow"
+    },
+    {
+      "match": {
+        "event": "turn.stop"
+      },
+      "action": "late",
+      "decision": "ack"
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "deny",
+      "ack": "expired"
+    },
+    {
+      "step": 1,
+      "effect": "ack",
+      "ack": "expired",
+      "accepted": false
+    }
+  ],
+  "after_ms": 500
+}

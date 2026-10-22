@@ -1,0 +1,520 @@
+{
+  "protocol": "ahp/1",
+  "spec_version": "1.0.0-beta.1",
+  "task_id": "demo-bridge-snapshot",
+  "producer": {
+    "name": "cc-cursor-bridge",
+    "version": "ahp-adapter-draft",
+    "host": {
+      "name": "claude-code",
+      "version": "2.1.306"
+    }
+  },
+  "created_at": "2026-10-22T01:26:59.880+08:00",
+  "transport": "local-fs",
+  "consumer_json": "partially_applied",
+  "consumer_notes": [
+    "timeouts_ms.turn.stop=300000 clamped to 170000"
+  ],
+  "events": {
+    "tool.pre": {
+      "class": "gate",
+      "allowed_classes": [
+        "gate"
+      ],
+      "native": [
+        "PreToolUse"
+      ],
+      "decisions": [
+        "allow",
+        "deny",
+        "ask"
+      ],
+      "default_decision": "deny",
+      "timeout_ms": 120000
+    },
+    "permission.request": {
+      "class": "gate",
+      "allowed_classes": [
+        "gate"
+      ],
+      "native": [
+        "PermissionRequest"
+      ],
+      "decisions": [
+        "allow",
+        "deny"
+      ],
+      "default_decision": "deny",
+      "timeout_ms": 120000
+    },
+    "input.request": {
+      "class": "gate",
+      "allowed_classes": [
+        "gate"
+      ],
+      "native": [
+        "Elicitation"
+      ],
+      "decisions": [
+        "accept",
+        "decline"
+      ],
+      "default_decision": "decline",
+      "timeout_ms": 120000
+    },
+    "turn.stop": {
+      "class": "gate",
+      "allowed_classes": [
+        "gate",
+        "notify"
+      ],
+      "native": [
+        "Stop"
+      ],
+      "decisions": [
+        "ack",
+        "block"
+      ],
+      "default_decision": "ack",
+      "timeout_ms": 120000
+    },
+    "session.start": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify",
+        "log",
+        "gate"
+      ],
+      "native": [
+        "SessionStart"
+      ],
+      "decisions": [
+        "ack"
+      ],
+      "default_decision": "ack",
+      "timeout_ms": 120000
+    },
+    "session.end": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "SessionEnd"
+      ]
+    },
+    "session.setup": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "Setup"
+      ]
+    },
+    "instructions.load": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "InstructionsLoaded"
+      ]
+    },
+    "prompt.submit": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify",
+        "log",
+        "gate"
+      ],
+      "native": [
+        "UserPromptSubmit"
+      ],
+      "decisions": [
+        "ack",
+        "block"
+      ],
+      "default_decision": "block",
+      "timeout_ms": 120000
+    },
+    "prompt.expand": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify",
+        "log",
+        "gate"
+      ],
+      "native": [
+        "UserPromptExpansion"
+      ],
+      "decisions": [
+        "ack",
+        "block"
+      ],
+      "default_decision": "block",
+      "timeout_ms": 120000
+    },
+    "message.delta": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "MessageDisplay"
+      ]
+    },
+    "permission.denied": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "PermissionDenied"
+      ]
+    },
+    "tool.post": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify",
+        "log",
+        "gate"
+      ],
+      "native": [
+        "PostToolUse"
+      ],
+      "decisions": [
+        "ack",
+        "block"
+      ],
+      "default_decision": "ack",
+      "timeout_ms": 120000
+    },
+    "tool.error": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify",
+        "log",
+        "gate"
+      ],
+      "native": [
+        "PostToolUseFailure"
+      ],
+      "decisions": [
+        "ack"
+      ],
+      "default_decision": "ack",
+      "timeout_ms": 120000
+    },
+    "tool.batch": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "PostToolBatch"
+      ]
+    },
+    "agent.notification": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "Notification"
+      ]
+    },
+    "subagent.start": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "SubagentStart"
+      ]
+    },
+    "subagent.stop": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify",
+        "log",
+        "gate"
+      ],
+      "native": [
+        "SubagentStop"
+      ],
+      "decisions": [
+        "ack",
+        "block"
+      ],
+      "default_decision": "ack",
+      "timeout_ms": 120000
+    },
+    "task.create": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify",
+        "log",
+        "gate"
+      ],
+      "native": [
+        "TaskCreated"
+      ],
+      "decisions": [
+        "ack",
+        "block"
+      ],
+      "default_decision": "block",
+      "timeout_ms": 120000
+    },
+    "task.complete": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify",
+        "log",
+        "gate"
+      ],
+      "native": [
+        "TaskCompleted"
+      ],
+      "decisions": [
+        "ack",
+        "block"
+      ],
+      "default_decision": "ack",
+      "timeout_ms": 120000
+    },
+    "turn.error": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify",
+        "log"
+      ],
+      "native": [
+        "StopFailure"
+      ]
+    },
+    "teammate.idle": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify",
+        "log",
+        "gate"
+      ],
+      "native": [
+        "TeammateIdle"
+      ],
+      "decisions": [
+        "ack",
+        "block"
+      ],
+      "default_decision": "ack",
+      "timeout_ms": 120000
+    },
+    "config.change": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "ConfigChange"
+      ]
+    },
+    "cwd.change": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "CwdChanged"
+      ]
+    },
+    "directory.add": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "DirectoryAdded"
+      ]
+    },
+    "file.change": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "FileChanged"
+      ]
+    },
+    "worktree.create": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify",
+        "log",
+        "gate"
+      ],
+      "native": [
+        "WorktreeCreate"
+      ],
+      "decisions": [
+        "ack"
+      ],
+      "default_decision": "ack",
+      "timeout_ms": 120000
+    },
+    "worktree.remove": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "WorktreeRemove"
+      ]
+    },
+    "compact.pre": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify",
+        "log",
+        "gate"
+      ],
+      "native": [
+        "PreCompact"
+      ],
+      "decisions": [
+        "ack",
+        "block"
+      ],
+      "default_decision": "ack",
+      "timeout_ms": 120000
+    },
+    "compact.post": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "PostCompact"
+      ]
+    },
+    "model.switch.pre": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify",
+        "log",
+        "gate"
+      ],
+      "native": [
+        "PreModelSwitch"
+      ],
+      "decisions": [
+        "allow",
+        "deny",
+        "ask"
+      ],
+      "default_decision": "deny",
+      "timeout_ms": 120000
+    },
+    "model.switch.post": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "PostModelSwitch"
+      ]
+    },
+    "input.result": {
+      "class": "log",
+      "allowed_classes": [
+        "log",
+        "notify"
+      ],
+      "native": [
+        "ElicitationResult"
+      ]
+    },
+    "policy.deny": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify"
+      ]
+    },
+    "plan.update": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify"
+      ],
+      "native": [
+        "PostToolUse(TodoWrite)"
+      ]
+    },
+    "producer.error": {
+      "class": "notify",
+      "allowed_classes": [
+        "notify"
+      ]
+    }
+  },
+  "features": {
+    "acks": true,
+    "full_files": true,
+    "updated_input": true,
+    "additional_context": true,
+    "message_delta": true,
+    "policy_deny_event": true,
+    "consumer_rules": true
+  },
+  "limits": {
+    "max_field_chars": 240,
+    "content_chars": 2000,
+    "command_chars": 4000,
+    "max_blocks": 3,
+    "host_hook_timeout_ms": 180000,
+    "max_additional_context_chars": 10000
+  },
+  "rules": {
+    "ids": [
+      "bash-rm-rf",
+      "bash-git-push-force",
+      "secret-env-file",
+      "ssh-dir",
+      "no-sudo"
+    ],
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "source": "config/rules.json + consumer.json",
+    "status": {
+      "bash-rm-rf": "applied",
+      "bash-git-push-force": "applied",
+      "secret-env-file": "applied",
+      "ssh-dir": "applied",
+      "no-sudo": "applied"
+    },
+    "required": [
+      "no-sudo"
+    ]
+  },
+  "redaction": {
+    "methods": [
+      "env-values"
+    ],
+    "token": "[redacted]"
+  }
+}

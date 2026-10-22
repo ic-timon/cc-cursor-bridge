@@ -1,0 +1,30 @@
+{
+  "id": "timeout-clamp",
+  "title": "consumer timeouts above the producer limit are clamped and reported",
+  "source": [
+    "draft.2 #3"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "session.start",
+      "payload": {
+        "source": "startup"
+      }
+    }
+  ],
+  "consumer": [],
+  "expect": [],
+  "consumer_json": {
+    "protocol": "ahp/1",
+    "consumer": {
+      "name": "RINO"
+    },
+    "timeouts_ms": {
+      "turn.stop": 300000,
+      "tool.pre": 60000
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "protocol": "ahp/1",
+  "seq": 21,
+  "decision": "accept",
+  "content": {
+    "env": "staging"
+  }
+}

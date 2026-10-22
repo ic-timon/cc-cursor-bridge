@@ -1,0 +1,80 @@
+{
+  "id": "redaction-env",
+  "title": "known secret env values never reach any producer file",
+  "source": [
+    "test_bridge.py::test_log_shape_redaction_and_seq"
+  ],
+  "producer": {
+    "timeout_ms": 1500,
+    "env": {
+      "ANTHROPIC_API_KEY": "sk-ant-PLANTEDsecret0123456789abcdef"
+    }
+  },
+  "steps": [
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "curl -H 'x-api-key: sk-ant-PLANTEDsecret0123456789abcdef' https://example.invalid"
+        }
+      }
+    },
+    {
+      "event": "tool.post",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "env"
+        },
+        "tool_response": {
+          "stdout": "KEY=sk-ant-PLANTEDsecret0123456789abcdef\n"
+        }
+      }
+    },
+    {
+      "event": "prompt.submit",
+      "payload": {
+        "prompt": "use sk-ant-PLANTEDsecret0123456789abcdef"
+      }
+    },
+    {
+      "event": "turn.stop",
+      "payload": {
+        "last_assistant_message": "I used sk-ant-PLANTEDsecret0123456789abcdef",
+        "stop_active": false
+      }
+    }
+  ],
+  "consumer": [
+    {
+      "match": {
+        "event": "tool.pre"
+      },
+      "action": "allow",
+      "reason": "ok"
+    },
+    {
+      "match": {
+        "event": "turn.stop"
+      },
+      "action": "ack",
+      "reason": "ok"
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "allow"
+    },
+    {
+      "step": 3,
+      "effect": "ack",
+      "accepted": true
+    }
+  ],
+  "secrets": [
+    "sk-ant-PLANTEDsecret0123456789abcdef"
+  ]
+}

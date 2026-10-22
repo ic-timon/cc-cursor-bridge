@@ -1,0 +1,50 @@
+{
+  "id": "rules-disabled",
+  "title": "a disabled rule does not deny; the gate decides",
+  "source": [
+    "test_bridge.py::test_disabled_rule_allows"
+  ],
+  "producer": {
+    "timeout_ms": 1500,
+    "rules": [
+      {
+        "id": "bash-rm-rf",
+        "enabled": false,
+        "tools": [
+          "Bash"
+        ],
+        "reason": "x",
+        "bash_rm_rf": true
+      }
+    ]
+  },
+  "steps": [
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "rm -rf build"
+        }
+      }
+    }
+  ],
+  "consumer": [
+    {
+      "match": {
+        "event": "tool.pre"
+      },
+      "action": "allow",
+      "reason": "ok"
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "allow",
+      "via": "reply",
+      "pending": true
+    }
+  ]
+}

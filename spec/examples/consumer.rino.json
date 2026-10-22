@@ -1,0 +1,37 @@
+{
+  "protocol": "ahp/1",
+  "spec_version": "1.0.0-draft.3",
+  "accept_protocols": [
+    "ahp/1"
+  ],
+  "consumer": {
+    "name": "RINO",
+    "version": "0.1"
+  },
+  "event_classes": {
+    "subagent.stop": "gate",
+    "message.delta": "notify"
+  },
+  "timeouts_ms": {
+    "turn.stop": 300000
+  },
+  "features": {
+    "message_delta": true
+  },
+  "extra_rules": [
+    {
+      "id": "no-sudo",
+      "enabled": true,
+      "required": true,
+      "tool_kinds": [
+        "shell"
+      ],
+      "tools": [
+        "Bash"
+      ],
+      "reason": "不要用 sudo",
+      "command_regex": "(^|[;&|\\n])\\s*sudo\\b"
+    }
+  ],
+  "created_at": "2026-10-22T01:26:58.000+08:00"
+}

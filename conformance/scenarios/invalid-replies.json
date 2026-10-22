@@ -1,0 +1,141 @@
+{
+  "id": "invalid-replies",
+  "title": "invalid replies are rejected: invalid ack and the fail-closed default",
+  "source": [
+    "spec 9.4",
+    "spec A.6 #3/#4"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "ls"
+        }
+      }
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "ls -a"
+        }
+      }
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "ls -l"
+        }
+      }
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "ls -R"
+        }
+      }
+    },
+    {
+      "event": "turn.stop",
+      "payload": {
+        "last_assistant_message": "done",
+        "stop_active": false
+      }
+    }
+  ],
+  "consumer": [
+    {
+      "match": {
+        "event": "tool.pre",
+        "nth": 1
+      },
+      "action": "invalid",
+      "raw": {
+        "decision": "maybe"
+      }
+    },
+    {
+      "match": {
+        "event": "tool.pre",
+        "nth": 2
+      },
+      "action": "raw",
+      "raw": "{\"decision\": \"allow\""
+    },
+    {
+      "match": {
+        "event": "tool.pre",
+        "nth": 3
+      },
+      "action": "raw",
+      "raw": {
+        "decision": "allow",
+        "updatedinput": {
+          "command": "rm -rf /"
+        }
+      }
+    },
+    {
+      "match": {
+        "event": "tool.pre",
+        "nth": 4
+      },
+      "action": "raw",
+      "raw": {
+        "decision": "accept"
+      }
+    },
+    {
+      "match": {
+        "event": "turn.stop"
+      },
+      "action": "raw",
+      "raw": {
+        "decision": "block"
+      }
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "effect": "deny",
+      "ack": "invalid",
+      "via": "invalid_reply"
+    },
+    {
+      "step": 1,
+      "effect": "deny",
+      "ack": "invalid"
+    },
+    {
+      "step": 2,
+      "effect": "deny",
+      "ack": "invalid"
+    },
+    {
+      "step": 3,
+      "effect": "deny",
+      "ack": "invalid"
+    },
+    {
+      "step": 4,
+      "effect": "ack",
+      "ack": "invalid",
+      "accepted": false
+    }
+  ]
+}

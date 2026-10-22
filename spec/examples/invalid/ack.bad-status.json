@@ -1,0 +1,8 @@
+{
+  "protocol": "ahp/1",
+  "task_id": "demo-bridge-snapshot",
+  "seq": 4,
+  "status": "late",
+  "applied_decision": "deny",
+  "ts": "2026-10-22T01:27:08.360+08:00"
+}

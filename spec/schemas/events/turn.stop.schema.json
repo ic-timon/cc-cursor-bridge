@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ahp.invalid/schemas/1/events/turn.stop.schema.json",
+  "title": "turn.stop payload (gate)",
+  "type": "object",
+  "required": [
+    "last_assistant_message"
+  ],
+  "properties": {
+    "last_assistant_message": {
+      "$ref": "../common.schema.json#/$defs/text"
+    },
+    "transcript_path": {
+      "type": "string"
+    },
+    "stop_active": {
+      "type": "boolean",
+      "description": "True when this stop follows a previous block (CC stop_hook_active)."
+    },
+    "blocks_used": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "max_blocks": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "background_tasks": {}
+  },
+  "additionalProperties": true,
+  "description": "Agent wants to end the turn. Decisions: ack (end) | block (continue, reason required)."
+}

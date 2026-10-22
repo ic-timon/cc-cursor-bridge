@@ -1,0 +1,38 @@
+{
+  "id": "plan-update",
+  "title": "plan.update is a standard notify event",
+  "source": [
+    "draft.2 #1"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "plan.update",
+      "payload": {
+        "source": "TodoWrite",
+        "items": [
+          {
+            "content": "write add",
+            "status": "completed"
+          },
+          {
+            "content": "run tests",
+            "status": "in_progress"
+          }
+        ]
+      }
+    }
+  ],
+  "consumer": [],
+  "expect": [
+    {
+      "step": 0,
+      "class": "notify",
+      "payload_has": [
+        "items"
+      ]
+    }
+  ]
+}

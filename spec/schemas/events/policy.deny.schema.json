@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ahp.invalid/schemas/1/events/policy.deny.schema.json",
+  "title": "policy.deny payload",
+  "type": "object",
+  "required": [
+    "rule_id",
+    "target_event",
+    "target_seq",
+    "reason"
+  ],
+  "properties": {
+    "rule_id": {
+      "type": "string"
+    },
+    "target_event": {
+      "$ref": "../common.schema.json#/$defs/event_name"
+    },
+    "target_seq": {
+      "$ref": "../common.schema.json#/$defs/seq"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "tool_name": {
+      "type": "string"
+    },
+    "tool_input": {
+      "$ref": "../common.schema.json#/$defs/tool_input"
+    }
+  },
+  "additionalProperties": true,
+  "description": "A static rule denied a gate event without asking the consumer."
+}

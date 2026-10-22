@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ahp.invalid/schemas/1/events/message.delta.schema.json",
+  "title": "message.delta payload",
+  "type": "object",
+  "required": [
+    "message_id",
+    "text",
+    "final"
+  ],
+  "properties": {
+    "message_id": {
+      "type": "string"
+    },
+    "turn_id": {
+      "type": "string"
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "final": {
+      "type": "boolean"
+    },
+    "kind": {
+      "enum": [
+        "text",
+        "reasoning"
+      ],
+      "default": "text"
+    },
+    "text": {
+      "$ref": "../common.schema.json#/$defs/text"
+    }
+  },
+  "additionalProperties": true
+}

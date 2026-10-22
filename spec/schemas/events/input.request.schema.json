@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ahp.invalid/schemas/1/events/input.request.schema.json",
+  "title": "input.request payload (gate)",
+  "type": "object",
+  "required": [
+    "message"
+  ],
+  "properties": {
+    "server": {
+      "type": "string",
+      "description": "MCP server or other source asking."
+    },
+    "message": {
+      "$ref": "../common.schema.json#/$defs/text"
+    },
+    "mode": {
+      "type": "string"
+    },
+    "requested_schema": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true,
+  "description": "Structured user-input request (MCP elicitation). Decisions: accept | decline."
+}

@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ahp.invalid/schemas/1/common.schema.json",
+  "title": "AHP v1 common definitions",
+  "$defs": {
+    "protocol": {
+      "const": "ahp/1"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^(?!\\.{1,2}$)[A-Za-z0-9._-]{1,200}$"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "event_name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$|^x-[a-z0-9_.-]+$"
+    },
+    "event_class": {
+      "enum": [
+        "gate",
+        "notify",
+        "log"
+      ]
+    },
+    "decision": {
+      "enum": [
+        "allow",
+        "deny",
+        "ask",
+        "block",
+        "accept",
+        "decline",
+        "ack"
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+      "description": "RFC 3339 with explicit offset (Z or ±hh:mm)."
+    },
+    "relpath": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[A-Za-z0-9._/-]{1,512}$",
+      "description": "Path relative to the task directory. No leading '/', no '..' segment."
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "producer": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "host": {
+          "type": "object",
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "truncated": {
+      "type": "object",
+      "required": [
+        "text",
+        "truncated",
+        "original_length",
+        "sha256"
+      ],
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true
+        },
+        "original_length": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Length of the redacted full text in Unicode code points."
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256",
+          "description": "SHA-256 of the UTF-8 bytes of the redacted full text."
+        },
+        "full_file": {
+          "$ref": "#/$defs/relpath"
+        }
+      },
+      "additionalProperties": false
+    },
+    "text": {
+      "description": "A string, or a truncation object when the producer cut it.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/truncated"
+        }
+      ]
+    },
+    "json_or_text": {
+      "description": "Any JSON value, or a truncation object over its JSON serialisation.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/truncated"
+        },
+        {
+          "not": {
+            "type": "object",
+            "required": [
+              "truncated",
+              "sha256",
+              "original_length"
+            ]
+          }
+        }
+      ]
+    },
+    "tool_input": {
+      "type": "object",
+      "description": "Tool arguments. String values MAY be truncation objects.",
+      "additionalProperties": true
+    },
+    "spec_version": {
+      "type": "string",
+      "pattern": "^1\\.\\d+\\.\\d+(-draft\\.[1-9]\\d*)?$",
+      "description": "1.<minor>.<patch>, optionally with the draft pre-release -draft.<N> (spec 2.2)."
+    }
+  }
+}

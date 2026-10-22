@@ -1,0 +1,37 @@
+{
+  "id": "subagent-stop-context",
+  "title": "subagent.stop carries the subagent's answer and context.agent_id",
+  "source": [
+    "test_bridge.py::test_subagent_stop_notice_carries_agent_context"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "subagent.stop",
+      "payload": {
+        "agent_id": "a-1",
+        "agent_type": "Explore",
+        "last_assistant_message": "found 3 files",
+        "agent_transcript_path": "/tmp/a-1.jsonl"
+      },
+      "context": {
+        "agent_id": "a-1"
+      }
+    }
+  ],
+  "consumer": [],
+  "expect": [
+    {
+      "step": 0,
+      "class": "notify",
+      "payload_has": [
+        "agent_id",
+        "agent_type",
+        "last_assistant_message",
+        "agent_transcript_path"
+      ]
+    }
+  ]
+}

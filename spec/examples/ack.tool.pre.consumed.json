@@ -1,0 +1,10 @@
+{
+  "protocol": "ahp/1",
+  "task_id": "demo-bridge-snapshot",
+  "seq": 4,
+  "status": "consumed",
+  "applied_decision": "deny",
+  "via": "reply",
+  "reply_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "ts": "2026-10-22T01:27:08.360+08:00"
+}

@@ -1,0 +1,36 @@
+{
+  "protocol": "ahp/1",
+  "task_id": "demo-bridge-snapshot",
+  "seq": 6,
+  "event": "policy.deny",
+  "class": "notify",
+  "producer": {
+    "name": "cc-cursor-bridge",
+    "version": "ahp-adapter-draft",
+    "host": {
+      "name": "claude-code",
+      "version": "2.1.306"
+    }
+  },
+  "ts": "2026-10-22T01:27:09.900+08:00",
+  "payload": {
+    "rule_id": "bash-rm-rf",
+    "target_event": "tool.pre",
+    "target_seq": 5,
+    "reason": "拦截递归强制删除（rm -rf，或 PowerShell 的 Remove-Item -Recurse -Force）",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "rm -rf build"
+    }
+  },
+  "context": {
+    "session_id": "c3233cdc-54f0-49fc-be19-21f5b86a66fd",
+    "cwd": "/private/tmp/ccb-demo2-woqt",
+    "transcript_path": "/Users/timon/.claude/projects/-private-tmp-ccb-demo2-woqt/c3233cdc-54f0-49fc-be19-21f5b86a66fd.jsonl",
+    "prompt_id": "ae7e0386-efda-495b-b65e-70f711d9946c",
+    "permission_mode": "acceptEdits"
+  },
+  "native": {
+    "event": "PreToolUse"
+  }
+}

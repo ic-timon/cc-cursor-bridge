@@ -1,0 +1,11 @@
+{
+  "protocol": "ahp/1",
+  "task_id": "demo-bridge-snapshot",
+  "seq": 18,
+  "status": "expired",
+  "applied_decision": "ack",
+  "via": "timeout",
+  "accepted": false,
+  "reason": "reply arrived after deadline; turn already ended unverified",
+  "ts": "2026-10-22T01:29:41.002+08:00"
+}
