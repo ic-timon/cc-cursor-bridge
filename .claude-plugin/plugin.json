@@ -1,7 +1,7 @@
 {
   "name": "cc-cursor-bridge",
   "displayName": "CC Cursor Bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Log every Claude Code hook event, deny dangerous Bash and file operations, and leave a local channel for a Cursor agent to reply.",
   "author": {
     "name": "ic-timon"
