@@ -465,6 +465,8 @@ hook 同步/异步配置在 `claude/hooks/hooks.json`：四个 gate（PreToolUse
 
 `additionalContext` 的宿主上限：CC 文档写明每个 hook 的每个 `additionalContext` 字符串上限 10,000 字符（不可配置）；超出时 CC 把全文存到会话目录的文件里，只注入文件路径和前 2,000 字符的预览，且不提示智能体去读——等于静默截断。CC 适配层因此声明 `limits.max_additional_context_chars = 10000`（配置只能调小），按 UTF-16 码元计数（与 CC 的 JavaScript 字符串长度一致，码点数不会更大），超出即 invalid。
 
+推理片段（`message.delta` 的 `kind: reasoning`）在 CC 上：CC 的 hook 输入不带推理/thinking 内容——MessageDisplay 只给界面上显示的助手文本，thinking 块只出现在会话 transcript 里，而适配层不解析 transcript（格式不公开、会变）。所以 CC 适配层 `features.reasoning_delta` 固定为 `false`；`consumer.json` 请求 `features.reasoning_delta: true` 时 `consumer_json` 记为 `partially_applied` 并在 `consumer_notes` 写明原因，不发 reasoning 片段。
+
 `prompt.submit` 在 CC 上：UserPromptSubmit 在 `hooks.json` 里是异步的，所以 CC 适配层不提供它作为 gate（`allowed_classes` 里没有 `gate`），§9.1 表里的 `prompt.submit` 一行在 CC 上不适用；要支持，需把该 hook 改为同步。
 
 ### A.3 退出码（按 CC 文档，**未在 2.1.306 上逐一复测**）
@@ -546,11 +548,12 @@ RINO 侧的分阶段声明（供 consumer 参考，不是规范要求）：第�
 
 仍开放：
 
-1. `reasoning` 片段打开的方式：先用 `consumer.json.features.reasoning_delta`，是否需要单独的事件名，留到 v1.1。
+1. `reasoning` 片段打开的方式：先用 `consumer.json.features.reasoning_delta`，是否需要单独的事件名，留到 v1.1。CC 适配层不支持（附录 A.2）。
 2. 沙箱传输（§14）随 Cube/E2B 搁置。
 
 ## 变更记录
 
+- **1.0.0-draft.3 补充 2**（2026-10-22，只改附录 A，说明性）：A.2 记下 CC 的 hook 不给推理内容，CC 适配层 `features.reasoning_delta` 固定 `false`。
 - **1.0.0-draft.3 补充**（2026-10-22，RINO）：§2.2 `spec_version` 接受 `-draft.<N>` 预发布后缀，producer SHOULD 写确切草案，consumer 比较时忽略后缀、MAY 警告；schema：`common.$defs.spec_version`，`capabilities`、`consumer`（新增可选）引用它；示例改为 `1.0.0-draft.3`；一致性检查 G18。
 - **1.0.0-draft.3**（2026-10-22）：§7.3 注入上下文——只认 gate reply，对非 gate 的 reply 写 `invalid` ack；`limits.max_additional_context_chars`（缺省 10000，超出为 invalid、不截断）；ack 先于注入；持久化为会话消息（说明性）。§7.2 reply 带不属于该事件的字段为 invalid。§9.1 逐事件 fail-closed 表（`session.start` 不注入、`prompt.submit` block）。附录 A.2 记下 CC 的 10,000 字符上限。schema：`capabilities.limits` 加 `max_additional_context_chars`。一致性测试新增 4 个场景（`context-notify-reply`、`context-limit`、`session-start-failclosed`、`prompt-submit-failclosed`）。
 
