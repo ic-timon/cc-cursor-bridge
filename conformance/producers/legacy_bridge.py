@@ -74,6 +74,16 @@ def effect_of(event: str, stdout: str, code: int) -> str:
     return "ack" if event in ("turn.stop", "subagent.stop") else "none"
 
 
+def injected_of(stdout: str) -> bool:
+    """Did the host receive additional context (hookSpecificOutput.additionalContext)?"""
+    try:
+        body = json.loads(stdout) if stdout.strip() else {}
+    except json.JSONDecodeError:
+        return False
+    hso = body.get("hookSpecificOutput") if isinstance(body, dict) else None
+    return bool(isinstance(hso, dict) and hso.get("additionalContext"))
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--describe", action="store_true")
@@ -137,6 +147,7 @@ def main(argv=None) -> int:
                               capture_output=True, text=True, env=step_env, cwd=str(work), timeout=300)
         append_line(effects, {"step": i, "event": step["event"],
                               "effect": effect_of(step["event"], proc.stdout, proc.returncode),
+                              "injected": injected_of(proc.stdout),
                               "exit": proc.returncode, "stderr": proc.stderr[-200:]})
     src = legacy_root / "tasks" / a.task
     if src.is_dir():

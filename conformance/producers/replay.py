@@ -43,6 +43,9 @@ REPLY_KEYS = {"protocol", "seq", "decision", "reason", "updated_input", "additio
 COMMAND_KEYS = {"command"}
 CONTENT_KEYS = {"content", "old_string", "new_string", "last_assistant_message", "prompt", "message"}
 SHORT_KEYS = {"tool_response", "error", "text"}
+# spec 7.2: events whose gate reply may carry additional_context
+CONTEXT_EVENTS = {"tool.pre", "session.start", "prompt.submit", "prompt.expand", "task.create", "task.complete",
+                  "teammate.idle", "compact.pre", "tool.post"}
 
 try:  # reference rule language
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
@@ -60,7 +63,8 @@ class Producer:
         self.dir = root / "tasks" / task
         self.effects = root / "harness" / "effects.jsonl"
         self.limits = {"max_field_chars": 240, "content_chars": 2000, "command_chars": 4000,
-                       "max_blocks": 3, "host_hook_timeout_ms": 180000, "max_gate_timeout_ms": 170000}
+                       "max_blocks": 3, "host_hook_timeout_ms": 180000, "max_gate_timeout_ms": 170000,
+                       "max_additional_context_chars": 10000}
         self.limits.update(self.cfg.get("limits") or {})
         if self.limits.get("host_hook_timeout_ms") in (None, 0):
             self.limits.pop("host_hook_timeout_ms", None)
@@ -272,8 +276,30 @@ class Producer:
         self.record(env, {"via": "none"})
         return seq
 
-    def effect(self, step: int, event: str, effect: str) -> None:
-        append_line(self.effects, {"step": step, "event": event, "effect": effect})
+    def effect(self, step: int, event: str, effect: str, injected: bool = False) -> None:
+        append_line(self.effects, {"step": step, "event": event, "effect": effect, "injected": injected})
+
+    def sweep_stray_replies(self) -> None:
+        """Spec 7.3 #1: a reply to a non-gate seq is never applied; it gets an invalid ack."""
+        replies = self.dir / "replies"
+        if not replies.is_dir() or "no_stray_ack" in MUTATE:
+            return
+        try:
+            current = int((self.dir / "seq").read_text().strip() or 0)
+        except (OSError, ValueError):
+            current = 0
+        for path in replies.glob("*.json"):
+            if path.name.startswith(".") or not path.stem.isdigit():
+                continue
+            seq = int(path.stem)
+            if seq > current or (self.dir / "acks" / f"{seq}.json").exists():
+                continue
+            if list((self.dir / "pending").glob(f"{seq}-*.json")):
+                continue  # a gate: handled by gate()
+            write_atomic(self.dir / "acks" / f"{seq}.json", {
+                "protocol": "ahp/1", "task_id": self.task, "seq": seq, "ts": now_iso(), "status": "invalid",
+                "via": "invalid_reply", "applied_decision": "ack",
+                "errors": [f"seq {seq} is not a gate: reply ignored, nothing injected (spec 7.3)"]})
 
     # ---------- gates ----------
     def validate_reply(self, path: Path, seq: int, event: str, decisions: List[str]) -> Tuple[Optional[dict], List[str]]:
@@ -303,10 +329,25 @@ class Producer:
             errs.append("updated_input must not change tool_name")
         if "content" in data and not (d == "accept" and event == "input.request"):
             errs.append("content only with accept on input.request")
+        if "additional_context" in data:  # spec 7.2 / 7.3
+            ctx = data["additional_context"]
+            if event not in CONTEXT_EVENTS:
+                errs.append(f"additional_context not allowed on {event}")
+            elif not isinstance(ctx, str):
+                errs.append("additional_context must be a string")
+            elif len(ctx) > int(self.limits["max_additional_context_chars"]) and "truncate_context" in MUTATE:
+                data["additional_context"] = ctx[: int(self.limits["max_additional_context_chars"])]
+            elif len(ctx) > int(self.limits["max_additional_context_chars"]):
+                errs.append(f"additional_context has {len(ctx)} chars > limit "
+                            f"{self.limits['max_additional_context_chars']} (not truncated)")
+        if "watch_paths" in data and event != "session.start":
+            errs.append(f"watch_paths not allowed on {event}")
+        if "worktree_path" in data and event != "worktree.create":
+            errs.append(f"worktree_path not allowed on {event}")
         data["__sha__"] = hashlib.sha256(raw).hexdigest()
         return (None if errs else data), errs
 
-    def gate(self, step: int, seq: int, event: str, payload: dict, context: dict, cap: dict) -> str:
+    def gate(self, step: int, seq: int, event: str, payload: dict, context: dict, cap: dict) -> Tuple[str, bool]:
         timeout_ms = int(cap["timeout_ms"])
         default = cap["default_decision"]
         decisions = cap["decisions"]
@@ -369,14 +410,16 @@ class Producer:
         ack["applied_decision"] = applied
         outcome["decision"] = applied
         if "no_ack" not in MUTATE:
-            write_atomic(self.dir / "acks" / f"{seq}.json", ack)  # spec 9.4: ack before executing
+            write_atomic(self.dir / "acks" / f"{seq}.json", ack)  # spec 9.4 / 7.3: ack before executing/injecting
         if "stray_tmp" in MUTATE:
             (self.dir / "pending" / f"{seq}-{event}.json.tmp").write_text("{}")
         self.record(env, outcome)
-        return applied
+        injected = bool(reply and ack.get("via") == "reply" and reply.get("additional_context"))
+        return applied, injected
 
     # ---------- main loop ----------
     def handle(self, step: int, item: dict) -> None:
+        self.sweep_stray_replies()
         event = item["event"]
         cap = self.events.get(event) or {"class": "log"}
         cls = cap["class"]
@@ -408,7 +451,8 @@ class Producer:
                     return
             seq = reserve_seq(self.dir)
             if cls == "gate":
-                self.effect(step, event, self.gate(step, seq, event, payload, context, cap))
+                applied, injected = self.gate(step, seq, event, payload, context, cap)
+                self.effect(step, event, applied, injected)
             elif cls == "notify":
                 env = self.envelope(seq, event, cls, payload, context)
                 self.write_notice("push", env, payload)
@@ -441,6 +485,7 @@ class Producer:
             self.handle(i, item)
             if item.get("pause_ms"):
                 time.sleep(item["pause_ms"] / 1000.0)
+        self.sweep_stray_replies()  # spec 7.3 #1: at the latest when the task ends
         return 0
 
 

@@ -1,0 +1,85 @@
+{
+  "id": "session-start-failclosed",
+  "title": "session.start as a gate: timeout, invalid reply and crash start the session without injection",
+  "source": [
+    "draft.3 (c)",
+    "spec 9.1"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "session.start",
+      "payload": {
+        "source": "startup"
+      }
+    },
+    {
+      "event": "session.start",
+      "payload": {
+        "source": "resume"
+      }
+    },
+    {
+      "event": "session.start",
+      "payload": {
+        "source": "resume"
+      },
+      "fault": "crash"
+    }
+  ],
+  "consumer": [
+    {
+      "match": {
+        "event": "session.start",
+        "nth": 1
+      },
+      "action": "none"
+    },
+    {
+      "match": {
+        "event": "session.start",
+        "nth": 2
+      },
+      "action": "raw",
+      "raw": {
+        "decision": "block",
+        "reason": "no",
+        "additional_context": "MUST-NOT-ARRIVE"
+      }
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "via": "timeout",
+      "ack": "expired",
+      "injected": false
+    },
+    {
+      "step": 1,
+      "via": "invalid_reply",
+      "ack": "invalid",
+      "injected": false
+    },
+    {
+      "step": 2,
+      "via": "error",
+      "ack": "expired",
+      "injected": false
+    }
+  ],
+  "consumer_json": {
+    "protocol": "ahp/1",
+    "consumer": {
+      "name": "conformance"
+    },
+    "event_classes": {
+      "session.start": "gate"
+    }
+  },
+  "expect_task": {
+    "producer_error": true
+  }
+}

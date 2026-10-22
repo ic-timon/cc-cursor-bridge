@@ -1,0 +1,80 @@
+{
+  "id": "context-notify-reply",
+  "title": "a reply to a notify event is never injected and gets an invalid ack",
+  "source": [
+    "draft.3 (a)",
+    "spec 7.3 #1"
+  ],
+  "producer": {
+    "timeout_ms": 1500
+  },
+  "steps": [
+    {
+      "event": "session.start",
+      "payload": {
+        "source": "startup"
+      },
+      "pause_ms": 600
+    },
+    {
+      "event": "tool.pre",
+      "payload": {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_conf",
+        "tool_input": {
+          "command": "echo hi"
+        }
+      }
+    },
+    {
+      "event": "turn.stop",
+      "payload": {
+        "last_assistant_message": "done",
+        "stop_active": false
+      }
+    }
+  ],
+  "consumer": [
+    {
+      "source": "push",
+      "match": {
+        "event": "session.start"
+      },
+      "action": "ack",
+      "additional_context": "NOTIFY-CONTEXT-MUST-NOT-ARRIVE"
+    },
+    {
+      "match": {
+        "event": "tool.pre"
+      },
+      "action": "allow",
+      "reason": "ok"
+    },
+    {
+      "match": {
+        "event": "turn.stop"
+      },
+      "action": "ack"
+    }
+  ],
+  "expect": [
+    {
+      "step": 0,
+      "class": "notify",
+      "injected": false,
+      "ack": "invalid"
+    },
+    {
+      "step": 1,
+      "effect": "allow",
+      "ack": "consumed",
+      "injected": false
+    },
+    {
+      "step": 2,
+      "effect": "ack",
+      "ack": "consumed",
+      "accepted": true
+    }
+  ]
+}

@@ -173,6 +173,11 @@
         "max_gate_timeout_ms": {
           "type": "integer",
           "minimum": 1000
+        },
+        "max_additional_context_chars": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Max length (Unicode code points) of one additional_context; longer replies are invalid, never truncated (spec 7.3). Default 10000."
         }
       },
       "additionalProperties": {

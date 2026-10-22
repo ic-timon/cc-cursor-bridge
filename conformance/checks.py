@@ -159,11 +159,14 @@ def g_one_ack_per_gate(v: TaskView, val: Validators, ctx: dict) -> Result:
     errs = [r.get("seq") for r in v.records() if r.get("class") == "gate"
             and (r.get("outcome") or {}).get("via") == "error"]
     want = gates | {s for s in errs if isinstance(s, int)}
+    # spec 7.3 #1: a reply to a non-gate event gets an invalid ack
+    stray = {s for s in acks - want if isinstance(v.acks.get(s), dict) and v.acks[s].get("status") == "invalid"
+             and v.acks[s].get("via") == "invalid_reply" and (v.dir / "replies" / f"{s}.json").exists()}
     bad = []
     if want - acks:
         bad.append(f"gates without ack: {sorted(want - acks)}")
-    if acks - want:
-        bad.append(f"acks without gate: {sorted(acks - want)}")
+    if acks - want - stray:
+        bad.append(f"acks without gate: {sorted(acks - want - stray)}")
     return _fail(bad)
 
 
@@ -173,8 +176,8 @@ def g_ack_matches_outcome(v: TaskView, val: Validators, ctx: dict) -> Result:
     bad = []
     for seq, ack in v.acks.items():
         rec = v.by_seq.get(seq)
-        if not isinstance(ack, dict) or rec is None:
-            continue
+        if not isinstance(ack, dict) or rec is None or rec.get("class") != "gate":
+            continue  # non-gate acks (spec 7.3 #1) are checked by G07
         out = rec.get("outcome") or {}
         if out.get("decision") != ack.get("applied_decision"):
             bad.append(f"seq {seq}: ack {ack.get('applied_decision')} vs events {out.get('decision')}")
@@ -431,6 +434,10 @@ def match_steps(v: TaskView, steps: List[dict]) -> Dict[int, dict]:
 
 def expectation_checks(v: TaskView, scenario: dict, effects: Dict[int, dict]) -> List[Tuple[str, str, Result]]:
     steps = scenario.get("steps") or []
+    for ev in scenario.get("requires_gate") or []:
+        allowed = ((((v.caps or {}).get("events") or {}).get(ev) or {}).get("allowed_classes")) or []
+        if "gate" not in allowed:
+            return [("E00", f"requires {ev} as gate", ("skip", f"producer does not offer {ev} as a gate"))]
     matched = match_steps(v, steps)
     results = []
     for exp in scenario.get("expect") or []:
@@ -444,6 +451,10 @@ def expectation_checks(v: TaskView, scenario: dict, effects: Dict[int, dict]) ->
                 eff, source = (rec.get("outcome") or {}).get("decision", "none"), "events.jsonl"
             results.append(("E01", f"{label} effect", ("pass", "") if eff == exp["effect"]
                             else ("fail", f"effect {eff!r} (from {source}), want {exp['effect']!r}")))
+        if "injected" in exp:
+            got = effects.get(i, {}).get("injected")
+            results.append(("E12", f"{label} context injected", ("pass", "") if got is exp["injected"]
+                            else ("fail", f"injected {got!r} (effects.jsonl), want {exp['injected']!r}")))
         if rec is None:
             if any(k in exp for k in ("via", "ack", "pending", "class", "accepted", "truncated", "payload_has")):
                 results.append(("E00", f"{label} recorded", ("fail", "no events.jsonl record for this step")))
@@ -487,6 +498,11 @@ def expectation_checks(v: TaskView, scenario: dict, effects: Dict[int, dict]) ->
         if name == "producer_error":
             got = any(isinstance(d, dict) and d.get("event") == "producer.error" for _, (_, d) in v.notices["push"].items())
             results.append(("E10", "producer.error emitted", ("pass", "") if got == want else ("fail", f"{got}, want {want}")))
+        if name == "limits":
+            for key, val in want.items():
+                got = ((v.caps or {}).get("limits") or {}).get(key)
+                results.append(("E13", f"capabilities limits.{key}", ("pass", "") if got == val
+                                else ("fail", f"{got!r}, want {val!r}")))
         if name == "capabilities_class":
             for ev, cls in want.items():
                 got = (((v.caps or {}).get("events") or {}).get(ev) or {}).get("class")

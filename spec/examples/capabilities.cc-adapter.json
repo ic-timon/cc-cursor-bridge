@@ -487,7 +487,8 @@
     "content_chars": 2000,
     "command_chars": 4000,
     "max_blocks": 3,
-    "host_hook_timeout_ms": 180000
+    "host_hook_timeout_ms": 180000,
+    "max_additional_context_chars": 10000
   },
   "rules": {
     "ids": [
