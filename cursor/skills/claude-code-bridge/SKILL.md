@@ -148,10 +148,20 @@ notifier 默认关，而且当前版本即使打开也只把打算发给 Cursor 
 
 没写 pending 回复之前，进程会停在 PreToolUse、PermissionRequest、Elicitation 或 Stop 上。push 和 log 不挡进程。
 
+## AHP v1（0.2.0 起）
+
+- 旧目录、旧命令、旧回复写法都照旧可用，你的循环不用改。
+- 同一批事件也写在 `$CC_BRIDGE_DIR/ahp/tasks/$CC_TASK_ID/`（AHP v1）。命令加 `--ahp` 就读写那边：`pending --ahp`、`reply ... --ahp`、`push --ahp`、`watch --ahp`。旧目录的 seq 可能有空号（AHP 独有的 `policy.deny`、`producer.error`、`plan.update` 也占号）。
+- 每个等待项结束后，`ahp/tasks/<task>/acks/<seq>.json` 写明实际执行了什么（`status`、`via`、`applied_decision`，Stop 还有 `accepted`）。不确定回复有没有生效，就看 ack。
+- 回复不合法时按默认决定处理，不会放行：PreToolUse/PermissionRequest deny，Elicitation decline，Stop 结束本轮。`reply` 会先校验，不合法 exit 2、什么都不写；看 stderr 改了再写。Stop 的 `block` 一定要带 `reason`。
+- `updatedInput` 改写的命令会重跑危险规则，命中仍然 deny。
+- hook 自己出错也按默认决定处理（fail-closed）。看 `ahp/.../push/*-producer.error.json`。
+
 ## 出错怎么办
 
 - 任务目录或 `events.jsonl` 一直没有：`--plugin-dir` 没指到插件根，或 hook 找不到 `python3`。用 `--debug-file <日志> --debug=hooks` 重跑一次，看 hook 的 stderr。
 - 流里出现 hook error：分发脚本把非 JSON 打到了 stdout，或脚本崩了。事件日志的 `summary.config_note` 会写配置回退。
 - `StopFailure`：这一轮是 API 错误。看 `summary.error`，不要改用户的代理配置。
 - pending 超时：插件已经按默认 deny。要重试就再跑一轮，或在超时前写入 reply。
+- 回复写了但被当成无效：看 `ahp/tasks/<task>/acks/<seq>.json` 的 `errors`。常见原因：拼错字段、`decision` 不在允许范围、Stop `block` 没有 `reason`。
 - 工作区不是 git 仓库时，`WorktreeCreate` 会失败。这个 hook 替换了 Claude Code 自带的 worktree 行为，脚本自己执行 `git worktree add`，分支名是 `cc-bridge/<slug>`。

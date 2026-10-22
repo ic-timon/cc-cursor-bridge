@@ -84,6 +84,10 @@ claude plugin marketplace add ic-timon/cc-cursor-bridge
 | `CC_BRIDGE_WAIT` | `1` 打开等待通道 | 关 |
 | `CC_BRIDGE_WAIT_PRE_TOOL` | `1` 时 PreToolUse 也等待 | 关 |
 | `CC_BRIDGE_WAIT_TIMEOUT` | 等待秒数 | 120 |
+| `CC_BRIDGE_AHP_DIR` | AHP v1 目录根（0.2.0） | `$CC_BRIDGE_DIR/ahp` |
+| `CC_BRIDGE_AHP` | `0` 时不写 AHP 目录 | `1` |
+| `CC_BRIDGE_LEGACY` | `0` 时不写旧格式目录，CLI 默认走 AHP | `1` |
+| `CC_BRIDGE_FAULT` | 仅测试：`crash` 让 hook 在处理中抛异常，用来验证 fail-closed | 空 |
 
 规则文件坏了会回退到脚本里的同一套内置规则，并在日志 `summary.config_note` 里写原因。把某条规则的 `enabled` 设为 `false` 就关掉它。还可以加 `command_regex` 或 `path_regex`。
 
@@ -244,7 +248,13 @@ python3 scripts/test_bridge.py
 /usr/bin/python3 scripts/test_bridge.py
 ```
 
-两条都应通过。覆盖 `rm -rf`、`git push --force`、`.env` / `.env.example`、`~/.ssh`、日志脱敏、等待超时、notifier 只写 outbox、worktree 往返，以及 `CC_BRIDGE_PROBE` 的探测回复。
+两条都应通过（0.2.0 起 51 个测试，其中 15 个是 AHP v1 和 fail-closed）。AHP v1 一致性：
+
+```bash
+python3 -m conformance --producer cc-adapter
+```
+
+覆盖 `rm -rf`、`git push --force`、`.env` / `.env.example`、`~/.ssh`、日志脱敏、等待超时、notifier 只写 outbox、worktree 往返，以及 `CC_BRIDGE_PROBE` 的探测回复。
 
 33 个 hook 的真实 `claude -p` 跑法在 `tests/hooks/run_all.py`。完整报告写到 `tests/hooks/out/`（不入库）。入库的短摘要是手写的 `tests/hooks/report.md`。探测模式只在设置了 `CC_BRIDGE_PROBE` 时改变 hook 的 stdout，平时行为不变。
 
