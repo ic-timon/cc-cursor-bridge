@@ -241,6 +241,7 @@ python3 scripts/bridge.py watch "$CC_TASK_ID" --ahp
 | 只脱敏 3 个环境变量的值 | 另外脱敏令牌格式：`sk-…`、`ghp_…`、`github_pat_…`、`xox?-…`、`AKIA…`、PEM 私钥 |
 | 通知里的 `transcript_path` 也会被截断 | 路径不截断；UserPromptSubmit 通知带 `prompt`，Elicitation 通知带 `message`/`mcp_server_name`/`requested_schema` |
 | 临时文件 `<name>.tmp` | `.<name>.<pid>.<随机>.tmp` |
+| `additionalContext` 多长都照发（CC 超过 10,000 字符会静默换成文件路径加 2,000 字符预览） | 超过 10,000（按 UTF-16 码元计，bridge JSON `ahp.max_additional_context_chars` 只能调小）就是无效回复，按默认决定处理，不截断。只有等待项（gate）的回复会注入；对 push 通知写的回复不会注入，AHP 目录里会给它一个 `status: invalid` 的 ack。回复里带了该事件不接受的字段（例如 Stop 带 `additionalContext`）也算无效 |
 
 第三方工具（例如 MCP 的 shell 工具）可以在 bridge JSON 里声明 `tool_kind`，规则的 `tool_kinds` 和 `tool.pre` 里的 `command` 就能覆盖它：
 

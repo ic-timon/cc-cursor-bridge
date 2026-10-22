@@ -25,7 +25,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 from conformance.common import AHP_TO_CC, append_line, read_json  # noqa: E402
-from conformance.producers.legacy_bridge import effect_of  # noqa: E402
+from conformance.producers.legacy_bridge import effect_of, injected_of  # noqa: E402
 
 RENAME_IN = {"stop_active": "stop_hook_active", "text": "delta", "server": "mcp_server_name"}
 AHP_ONLY = {"tool_kind", "command", "items"}
@@ -119,7 +119,9 @@ def main(argv=None) -> int:
     cfg = {"pending": {k: limits[k] for k in ("content_chars", "command_chars") if k in limits},
            "log": {k: limits[k] for k in ("max_field_chars",) if k in limits},
            "wait_all": {"timeout_seconds": prod.get("timeout_ms", 120000) / 1000.0, "poll_interval_seconds": 0.05},
-           "ahp": {"tool_kinds": tool_kinds(sc)}}
+           "ahp": {"tool_kinds": tool_kinds(sc),
+                   **({"max_additional_context_chars": limits["max_additional_context_chars"]}
+                      if "max_additional_context_chars" in limits else {})}}
     conf = root / "adapter-config"
     conf.mkdir(exist_ok=True)
     (conf / "bridge.json").write_text(json.dumps(cfg), encoding="utf-8")
@@ -144,6 +146,7 @@ def main(argv=None) -> int:
                               timeout=300)
         append_line(effects, {"step": i, "event": step["event"],
                               "effect": effect_of(step["event"], proc.stdout, proc.returncode),
+                              "injected": injected_of(proc.stdout),
                               "exit": proc.returncode, "stderr": proc.stderr[-200:]})
         if step.get("pause_ms"):
             time.sleep(step["pause_ms"] / 1000.0)

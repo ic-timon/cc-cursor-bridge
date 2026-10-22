@@ -1164,9 +1164,10 @@ class AhpProducerTest(unittest.TestCase):
             base = self.legacy if tree == "legacy" else self.ahp
             for _ in range(100):
                 pending = base / "pending"
-                files = [f for f in pending.glob("*.json") if not f.name.endswith(".full.json")] if pending.is_dir() else []
+                files = [f for f in pending.glob("*.json") if not f.name.endswith(".full.json")
+                         and not (base / "replies" / f"{f.name.split('-', 1)[0]}.json").exists()] if pending.is_dir() else []
                 if files:
-                    seq = files[-1].name.split("-", 1)[0]
+                    seq = max(files, key=lambda f: int(f.name.split("-", 1)[0])).name.split("-", 1)[0]
                     target = base / "replies" / f"{seq}.json"
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(raw if raw is not None else json.dumps(body), encoding="utf-8")
@@ -1363,6 +1364,47 @@ class AhpProducerTest(unittest.TestCase):
         bridge.handle_event(self.event(), self.environ)
         self.assertFalse((self.bridge_dir / "ahp").exists())
         self.assertTrue((self.legacy / "pending" / "1-PreToolUse.json").is_file())
+
+    def test_additional_context_limit_and_event_fields(self):
+        # draft.3 spec 7.3: over CC's 10,000-char cap is invalid, never truncated
+        thread = self.reply_later({"decision": "allow", "additional_context": "x" * 10_001})
+        result = bridge.handle_event(self.event(), self.environ)
+        thread.join(3)
+        self.assertIn('"permissionDecision": "deny"', result.stdout)
+        self.assertNotIn("additionalContext", result.stdout)
+        self.assertEqual(self.ack(1)["status"], "invalid")
+        caps = json.loads((self.ahp / "capabilities.json").read_text(encoding="utf-8"))
+        self.assertEqual(caps["limits"]["max_additional_context_chars"], 10_000)
+        # astral characters count twice, as in Claude Code's JavaScript length
+        thread = self.reply_later({"decision": "allow", "additional_context": "\U0001F600" * 5_001})
+        result = bridge.handle_event(self.event(), self.environ)
+        thread.join(3)
+        self.assertIn('"deny"', result.stdout)
+        thread = self.reply_later({"decision": "allow", "additional_context": "ok"})
+        result = bridge.handle_event(self.event(), self.environ)
+        thread.join(3)
+        self.assertEqual(json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"], "ok")
+        # turn.stop does not take additional_context (spec 7.2)
+        thread = self.reply_later({"decision": "ack", "additional_context": "nope"})
+        result = bridge.handle_event(self.event("Stop", last_assistant_message="x"), self.environ)
+        thread.join(3)
+        self.assertEqual(result.stdout, "")
+        last = max(int(f.stem) for f in (self.ahp / "acks").glob("*.json"))
+        self.assertEqual((self.ack(last)["status"], self.ack(last)["accepted"]), ("invalid", False))
+
+    def test_reply_to_notify_event_is_acked_invalid(self):
+        self.environ.pop("CC_BRIDGE_WAIT_ALL")
+        bridge.handle_event(self.event("SessionStart", source="startup"), self.environ)
+        self.assertTrue((self.ahp / "push" / "1-session.start.json").is_file())
+        (self.ahp / "replies").mkdir(parents=True, exist_ok=True)
+        (self.ahp / "replies" / "1.json").write_text('{"decision":"ack","additional_context":"x"}', encoding="utf-8")
+        (self.ahp / "replies" / "99.json").write_text('{"decision":"ack"}', encoding="utf-8")  # future seq: left alone
+        self.environ["CC_BRIDGE_EVENT_MODE_PreToolUse"] = "log"
+        result = bridge.handle_event(self.event(), self.environ)
+        self.assertNotIn("additionalContext", result.stdout)
+        ack = self.ack(1)
+        self.assertEqual((ack["status"], ack["via"], ack["applied_decision"]), ("invalid", "invalid_reply", "ack"))
+        self.assertFalse((self.ahp / "acks" / "99.json").exists())
 
     def test_token_redaction_and_paths_not_truncated(self):
         self.environ.pop("CC_BRIDGE_WAIT_ALL")

@@ -91,6 +91,21 @@ LEGACY_ALIASES = {
     "additionalContext": "additional_context", "watchPaths": "watch_paths",
     "worktreePath": "worktree_path", "displayContent": "display_content",
 }
+# spec 7.2: events whose gate reply may carry additional_context / other event-specific fields
+CONTEXT_EVENTS = {"tool.pre", "session.start", "prompt.submit", "prompt.expand", "task.create", "task.complete",
+                  "teammate.idle", "compact.pre", "tool.post"}
+FIELD_EVENTS = {"watch_paths": {"session.start"}, "worktree_path": {"worktree.create"},
+                "display_content": {"message.delta"}}
+# Appendix A.2: Claude Code caps each additionalContext string at 10,000 characters (JS length,
+# i.e. UTF-16 code units) and silently swaps longer text for a file path + 2,000-char preview.
+CC_CONTEXT_CAP = 10_000
+
+
+def context_length(text: str) -> int:
+    """Length as Claude Code counts it (UTF-16 code units); never below the code point count."""
+    return len(text.encode("utf-16-le")) // 2
+
+
 RULE_MATCHERS = {"bash_rm_rf", "powershell_remove_recurse_force", "git_push_force", "env_files", "home_ssh",
                  "command_regex", "path_regex"}
 RULE_META = {"id", "enabled", "tools", "tool_kinds", "reason", "required", "include_force_with_lease"}
@@ -349,7 +364,8 @@ def shell_command(tool_input: dict, spec: dict) -> str:
 
 # --------------------------------------------------------------------------- replies
 
-def normalize_reply(data: Any, seq: int, event: str, decisions: List[str]) -> Tuple[Optional[dict], List[str]]:
+def normalize_reply(data: Any, seq: int, event: str, decisions: List[str],
+                    max_context: int = CC_CONTEXT_CAP) -> Tuple[Optional[dict], List[str]]:
     """Spec 7 + 9.4 with the Appendix A.5 aliases. Returns (canonical reply, errors)."""
     if not isinstance(data, dict):
         return None, ["reply is not a JSON object"]
@@ -409,6 +425,15 @@ def normalize_reply(data: Any, seq: int, event: str, decisions: List[str]) -> Tu
     for key, typ in (("additional_context", str), ("worktree_path", str), ("display_content", str)):
         if key in out and not isinstance(out[key], typ):
             errors.append(f"{key} must be a string")
+    if "additional_context" in out:  # spec 7.2 / 7.3
+        if event not in CONTEXT_EVENTS:
+            errors.append(f"additional_context not allowed on {event} (spec 7.2)")
+        elif isinstance(out["additional_context"], str) and context_length(out["additional_context"]) > max_context:
+            errors.append(f"additional_context is {context_length(out['additional_context'])} chars > "
+                          f"limits.max_additional_context_chars {max_context} (never truncated, spec 7.3)")
+    for key, events in FIELD_EVENTS.items():
+        if key in out and event not in events:
+            errors.append(f"{key} not allowed on {event} (spec 7.2)")
     if "watch_paths" in out and not (isinstance(out["watch_paths"], list)
                                      and all(isinstance(p, str) for p in out["watch_paths"])):
         errors.append("watch_paths must be a list of strings")
@@ -458,6 +483,7 @@ class Task:
             "max_blocks": int(base_max_blocks(cfg, environ)),
             "host_hook_timeout_ms": host,
             "max_gate_timeout_ms": host - HOST_MARGIN_MS,
+            "max_additional_context_chars": max_context_chars(cfg),
         }
         self.shaper = Shaper(environ, self.limits)
         self.producer = {"name": PRODUCER_NAME, "version": plugin_version(PLUGIN_ROOT), "host": {"name": "claude-code"}}
@@ -651,6 +677,27 @@ class Task:
             body["reason"] = self.shaper.redact_text(str(body["reason"]))[:500]
         write_atomic(self.dir / "acks" / f"{seq}.json", body)
 
+    def sweep_stray_replies(self) -> List[int]:
+        """Spec 7.3 #1: a reply to a non-gate seq is never applied; ack it invalid before the next event."""
+        replies = self.dir / "replies"
+        out: List[int] = []
+        if not replies.is_dir():
+            return out
+        try:
+            current = int((self.dir / "seq").read_text(encoding="utf-8").strip() or 0)
+        except (OSError, ValueError):
+            current = 0
+        for path in replies.glob("*.json"):
+            if path.name.startswith(".") or not path.stem.isdigit():
+                continue
+            seq = int(path.stem)
+            if seq > current or self.has_ack(seq) or any((self.dir / "pending").glob(f"{seq}-*.json")):
+                continue
+            self.write_ack(seq, {"status": "invalid", "via": "invalid_reply", "applied_decision": "ack",
+                                 "errors": [f"seq {seq} is not a gate: reply ignored, nothing injected (spec 7.3)"]})
+            out.append(seq)
+        return out
+
     def has_ack(self, seq: int) -> bool:
         return (self.dir / "acks" / f"{seq}.json").is_file()
 
@@ -671,6 +718,15 @@ class Task:
 
 FEATURES = {"acks": True, "full_files": True, "updated_input": True, "additional_context": True,
             "message_delta": True, "policy_deny_event": True, "consumer_rules": True, "reasoning_delta": False}
+
+
+def max_context_chars(cfg: dict) -> int:
+    """bridge JSON ahp.max_additional_context_chars may only lower CC's own cap."""
+    try:
+        asked = int((cfg.get("ahp") or {}).get("max_additional_context_chars") or CC_CONTEXT_CAP)
+    except (TypeError, ValueError):
+        asked = CC_CONTEXT_CAP
+    return max(1, min(asked, CC_CONTEXT_CAP))
 
 
 def rules_source(environ: dict) -> str:

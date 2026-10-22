@@ -1528,9 +1528,10 @@ def _read_reply_plain(path: Path) -> Tuple[Optional[Any], Optional[str], str]:
         return None, f"reply is not JSON: {exc}", sha
 
 
-def _normalize(data: Any, seq: int, ahp_name: str, decisions: List[str]) -> Tuple[Optional[dict], List[str]]:
+def _normalize(data: Any, seq: int, ahp_name: str, decisions: List[str],
+               max_context: int = 10_000) -> Tuple[Optional[dict], List[str]]:
     if ahp_cc:
-        return ahp_cc.normalize_reply(data, seq, ahp_name, decisions)
+        return ahp_cc.normalize_reply(data, seq, ahp_name, decisions, max_context)
     if not isinstance(data, dict):
         return None, ["reply is not a JSON object"]
     decision = str(data.get("decision") or data.get("behavior") or ("ack" if data.get("ack") is True else "")).lower()
@@ -1614,6 +1615,10 @@ def handle_event(
         entry = task.entry(ahp_name)
         if entry is not None:
             mode = ahp_cc.CLASS_TO_MODE[entry["class"]]
+        try:
+            task.sweep_stray_replies()  # spec 7.3 #1, before this event
+        except OSError as exc:
+            stderr += f"cc-cursor-bridge: 无法检查 replies/: {exc}\n"
     elif AHP_IMPORT_ERROR and env_flag(environ, "CC_BRIDGE_AHP", True):
         stderr += f"cc-cursor-bridge: AHP 模块不可用，只写旧格式: {AHP_IMPORT_ERROR}\n"
     legacy = task is None or ahp_cc.legacy_enabled(environ)
@@ -1907,7 +1912,8 @@ def run_gate(
     else:
         errors = [error] if error else []
         if not errors:
-            reply, errors = _normalize(data, seq, ahp_name, decisions)
+            limit = task.limits["max_additional_context_chars"] if task is not None else 10_000
+            reply, errors = _normalize(data, seq, ahp_name, decisions, limit)
         if errors:
             status, via, applied = "invalid", "invalid_reply", default
             why = "回复无效: " + "; ".join(errors)
@@ -2339,8 +2345,13 @@ def cli(argv: List[str]) -> HookResult:
             if legacy_pending is not None:
                 name = ahp_cc.CC_TO_AHP.get(str(legacy_pending.get("event") or ""), ("",))[0]
                 decisions = ahp_decisions(name) if name else []
+        try:
+            caps = json.loads((aroot / "capabilities.json").read_text(encoding="utf-8"))
+            limit = int((caps.get("limits") or {}).get("max_additional_context_chars") or ahp_cc.CC_CONTEXT_CAP)
+        except (OSError, ValueError, AttributeError):
+            limit = ahp_cc.CC_CONTEXT_CAP
         if name:
-            reply, errors = ahp_cc.normalize_reply(payload, seq, name, decisions)
+            reply, errors = ahp_cc.normalize_reply(payload, seq, name, decisions, limit)
         else:
             # No pending to check against: only the event-independent rules apply.
             every = sorted({d for ds in ahp_cc.DECISIONS.values() for d in ds} | {"defer"})

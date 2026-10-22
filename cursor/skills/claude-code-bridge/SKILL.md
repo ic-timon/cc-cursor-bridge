@@ -155,6 +155,7 @@ notifier 默认关，而且当前版本即使打开也只把打算发给 Cursor 
 - 每个等待项结束后，`ahp/tasks/<task>/acks/<seq>.json` 写明实际执行了什么（`status`、`via`、`applied_decision`，Stop 还有 `accepted`）。不确定回复有没有生效，就看 ack。
 - 回复不合法时按默认决定处理，不会放行：PreToolUse/PermissionRequest deny，Elicitation decline，Stop 结束本轮。`reply` 会先校验，不合法 exit 2、什么都不写；看 stderr 改了再写。Stop 的 `block` 一定要带 `reason`。
 - `updatedInput` 改写的命令会重跑危险规则，命中仍然 deny。
+- `additionalContext` 只在等待项（pending）的回复里有效，最长 10,000 字符；超了整条回复作废（不截断），按默认决定处理。对 push 通知写回复没有用。Stop 的回复不能带 `additionalContext`。
 - hook 自己出错也按默认决定处理（fail-closed）。看 `ahp/.../push/*-producer.error.json`。
 
 ## 出错怎么办
