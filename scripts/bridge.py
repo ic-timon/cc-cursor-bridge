@@ -101,6 +101,23 @@ def default_rules() -> List[dict]:
             "reason": "拦截访问 ~/.ssh",
             "home_ssh": True,
         },
+        {
+            "id": "agent-artifact-dirs",
+            "enabled": True,
+            "tools": [
+                "Bash",
+                "PowerShell",
+                "Read",
+                "Edit",
+                "Write",
+                "MultiEdit",
+                "NotebookEdit",
+                "Glob",
+                "Grep",
+            ],
+            "reason": "拦截访问 .claude-flow/、.swarm/ 等 agent 运行产物目录（不要 git add -A 把它们带进 PR）",
+            "path_regex": '(?:^|[/\\\\\\s\'"=:])\\.(?:claude-flow|swarm)(?:$|[/\\\\\\s\'"|&;<>])',
+        },
     ]
 
 

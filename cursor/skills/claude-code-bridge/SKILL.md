@@ -27,11 +27,11 @@ export CC_BRIDGE_DIR="${CC_BRIDGE_DIR:-$HOME/.cc-bridge}"
 
 ## 启动
 
-`--plugin-dir` 指到含 `.claude-plugin/plugin.json` 和 `claude/hooks/hooks.json` 的检出。这台 self-hosted worker 上的 cloud agent 不会从仓库或工作区的 `.cursor/skills/`、`~/.cursor/plugins/local`、`~/.agents/skills/` 加载这份 skill。它只在 Cursor 里做过 Customize → Skills 的 “Sync Skills for Cloud Agents” 之后才能看到。同步会把 `~/.cursor/skills/claude-code-bridge/` 移进 AgentStores；之后改了 skill 要再同步一次。
+`--plugin-dir` 指到含 `.claude-plugin/plugin.json` 和 `claude/hooks/hooks.json` 的检出。本机用 **`~/Sync/Test/cc-cursor-bridge` 的 `main`**，不要写死旧功能分支名（例如曾经的 `feat/plugin-skeleton`）。这台 self-hosted worker 上的 cloud agent 不会从仓库或工作区的 `.cursor/skills/`、`~/.cursor/plugins/local`、`~/.agents/skills/` 加载这份 skill。它只在 Cursor 里做过 Customize → Skills 的 “Sync Skills for Cloud Agents” 之后才能看到。同步会把 `~/.cursor/skills/claude-code-bridge/` 移进 AgentStores；之后改了 skill 要再同步一次。
 
 ```bash
 claude -p \
-  --plugin-dir /path/to/cc-cursor-bridge \
+  --plugin-dir ~/Sync/Test/cc-cursor-bridge \
   --output-format stream-json \
   --verbose \
   --include-hook-events \
@@ -86,7 +86,7 @@ tail -n +1 -f "$CC_BRIDGE_DIR/tasks/$CC_TASK_ID/events.jsonl"
 
 被拦之后换一条不触犯规则的路。不要试图绕过 hook，也不要改规则文件来放行，除非用户明确要求。
 
-`rm -r`（没有 `-f`）和 `git push origin +branch` 这种 refspec 强制推送当前不拦。
+`rm -r`（没有 `-f`）和 `git push origin +branch` 这种 refspec 强制推送当前不拦。 `.claude-flow/`、`.swarm/` 由默认规则 `agent-artifact-dirs` 拦截（回复不能改写）；PR 前不要 `git add -A` 把它们带进提交。
 
 ## 默认分流
 
@@ -114,10 +114,10 @@ MessageDisplay 自带 `delta`（助手文本片段）、`message_id`、`final`�
 `claude -p` 放后台。每一轮先处理会卡住的 pending，再批量读 push：
 
 ```bash
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py pending "$CC_TASK_ID"
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '<json>'
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py push "$CC_TASK_ID"
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py pending "$CC_TASK_ID"
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '<json>'
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py push "$CC_TASK_ID"
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
 ```
 
 `pending` 只列出还没有 `replies/<seq>.json` 的等待项。`push` 列出尚未消费的推送并前进游标；`--since <seq>` 从该序号之后再列一次。`pending` 和 `push` 每行第一列是完整路径，没有 kind 前缀；有预览时在路径后接一个 TAB 和 `# reply: ...` / `# assistant: ...`，没有预览时只有路径，和以前一致。`watch` 把新出现的 pending 和 push 各打一行（`pending <路径>` 或 `push <路径>`），预览同样用 TAB 接在路径后，适合盯着看。预览格式：`# reply: <回答第一行>`（Stop/SubagentStop）、`# response: ...`（PostToolUse）、`# error: ...`（PostToolUseFailure）、`# assistant: ...`（助手文本打开时）。加 `--once` 只打当前这一批。
@@ -127,7 +127,7 @@ python3 /path/to/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
 - PreToolUse：`{"decision":"allow|deny|ask|defer","reason":"...","updatedInput":{...}}`
 - PermissionRequest：`{"decision":"allow|deny","message":"...","updatedInput":{...}}`
 - Elicitation：`{"decision":"accept|decline"}`
-- Stop：这是验收。测试或要求还没满足时 `{"decision":"block","reason":"具体缺什么"}`，让 Claude Code 继续做；满足了就 `{"ack":true}` 结束。通知里的 `last_assistant_message` 是 CC 的最后一条回答，验收前先看它。`stop_hook_active` 为 true 时，没有明确的 block 就让它停。每个任务最多阻断 `stop.max_blocks` 次（默认 3），到了上限即使再 block 也放行结束
+- Stop：这是验收。测试或要求还没满足时 `{"decision":"block","reason":"具体缺什么"}`，让 Claude Code 继续做；满足了就 `{"ack":true}` 结束。通知里的 `last_assistant_message` 是 CC 的最后一条回答，验收前先看它。`stop_hook_active` 为 true 时，没有明确的 block 就让它停。每个任务最多阻断 `stop.max_blocks` 次（默认 3），到了上限即使再 block 也放行结束。**外部依赖这次会话解不了时**（例如 CI runner 离线、公平队列被压测占满）：应 `{"ack":true}`，把缺口写进 PR/报告；不要用同一理由反复 block Stop，也不要抬高 `CC_BRIDGE_STOP_MAX_BLOCKS` 空转
 - 其余事件在 `wait_all` 里才会要回复：可阻断的用 `{"decision":"block","reason":"..."}`，否则 `{"ack":true}`
 
 命令和文件内容超过上限时（默认命令 4000 字、文件内容 2000 字），短文件里该字段是一个带 `text`、`truncated: true`、`original_length` 和 `sha256` 的对象，完整且已脱敏的正文在同目录的 `<seq>-<事件>.full.json`。Stop/SubagentStop 的 `last_assistant_message`、PostToolUse 的 `tool_response`、PostToolUseFailure 的 `error`、开关打开时的 `assistant_text` 也走同一套；其中工具返回和错误在主通知里按 `log.max_field_chars`（默认 240）截断。命令或回答被截断时，先读这份 `.full.json` 再决定 allow 或验收。

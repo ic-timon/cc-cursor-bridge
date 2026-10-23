@@ -4,16 +4,16 @@
 
 ## 这是什么
 
-这是一个 Claude Code 插件加一份 Cursor skill。插件把 Claude Code 的 hook 记下来，让 Cursor agent 能看到正在发生的事。默认有 4 个事件会停下来等你回复：`PreToolUse`（放行或拒绝工具）、`PermissionRequest`（权限请求）、`Elicitation`（接受或拒绝 MCP 提问）、`Stop`（验收，决定结束还是继续）。`config/rules.json` 命中的危险操作（`rm -rf`、强制 push、`.env`、`~/.ssh`）会立刻拒绝，不写 pending，回复也不能改写。
+这是一个 Claude Code 插件加一份 Cursor skill。插件把 Claude Code 的 hook 记下来，让 Cursor agent 能看到正在发生的事。默认有 4 个事件会停下来等你回复：`PreToolUse`（放行或拒绝工具）、`PermissionRequest`（权限请求）、`Elicitation`（接受或拒绝 MCP 提问）、`Stop`（验收，决定结束还是继续）。`config/rules.json` 命中的危险操作（`rm -rf`、强制 push、`.env`、`~/.ssh`、`.claude-flow/`、`.swarm/`）会立刻拒绝，不写 pending，回复也不能改写。
 
 ## 在 Mac 上安装
 
 ### Claude Code
 
-一次任务用 `--plugin-dir`，不改全局配置：
+一次任务用 `--plugin-dir`，不改全局配置。本机 live 检出是 `~/Sync/Test/cc-cursor-bridge` 的 **`main`**（不要写死旧功能分支名，例如曾经的 `feat/plugin-skeleton`）：
 
 ```bash
-claude --plugin-dir /path/to/cc-cursor-bridge -p "任务说明"
+claude --plugin-dir ~/Sync/Test/cc-cursor-bridge -p "任务说明"
 ```
 
 要装进 Claude Code，用仓库里的 `.claude-plugin/marketplace.json`。marketplace 的名字是文件里的 `"name"`，也就是 `cc-cursor-bridge`。这条会把 marketplace 写进 Claude Code 的用户设置；不想改设置就只用上面的 `--plugin-dir`。
@@ -21,14 +21,14 @@ claude --plugin-dir /path/to/cc-cursor-bridge -p "任务说明"
 本地目录（绝对路径，或在会话里用 `./` 开头的相对路径）：
 
 ```bash
-claude plugin marketplace add /path/to/cc-cursor-bridge
+claude plugin marketplace add ~/Sync/Test/cc-cursor-bridge
 claude plugin install cc-cursor-bridge@cc-cursor-bridge
 ```
 
 已经打开 Claude Code 时：
 
 ```text
-/plugin marketplace add /path/to/cc-cursor-bridge
+/plugin marketplace add ~/Sync/Test/cc-cursor-bridge
 /plugin install cc-cursor-bridge@cc-cursor-bridge
 ```
 
@@ -62,10 +62,10 @@ scripts/install_cursor_skill.sh
 把下面这段贴给这台 worker 上的 Cursor cloud agent，换成你的目录和任务：
 
 ```text
-用 claude-code-bridge 让本机 Claude Code 在 <dir> 里实现 <任务>，按默认策略审批。危险命令直接拒绝。PreToolUse 和 PermissionRequest 看完再 allow。仓库路径里的 Write 如果被 safetyCheck 挡住，用 PermissionRequest allow。Stop 时验收：测试或要求没满足就 block，并写明缺什么。不要用 bypass 权限，不要改 cc-switch。
+用 claude-code-bridge 让本机 Claude Code 在 <dir> 里实现 <任务>，按默认策略审批。插件用 --plugin-dir 指到 ~/Sync/Test/cc-cursor-bridge（main，不要写死 feat/plugin-skeleton 等旧分支）。危险命令直接拒绝。PreToolUse 和 PermissionRequest 看完再 allow。仓库路径里的 Write 如果被 safetyCheck 挡住，用 PermissionRequest allow。Stop 时验收：测试或要求没满足就 block，并写明缺什么；若缺的是这次会话解不了的外部依赖（例如 CI runner 离线、公平队列被压测占满），不要反复用同一理由 block Stop，也不要抬高 CC_BRIDGE_STOP_MAX_BLOCKS 空转——ack 结束，把缺口写进 PR/报告。不要用 bypass 权限，不要改 cc-switch。提交前不要 git add -A（.claude-flow/、.swarm/ 等产物目录会被默认规则拒绝，也不该进 PR）。
 ```
 
-Agent 会做这些事：用 `--plugin-dir` 在后台启动 `claude -p`，循环 `pending` 然后 `reply`，用 `push` 批量读通知，在 Stop 上做验收。
+Agent 会做这些事：用 `--plugin-dir ~/Sync/Test/cc-cursor-bridge` 在后台启动 `claude -p`，循环 `pending` 然后 `reply`，用 `push` 批量读通知，在 Stop 上做验收。
 
 ## 自己用命令行
 
@@ -96,11 +96,11 @@ export CC_BRIDGE_DIR="${CC_BRIDGE_DIR:-$HOME/.cc-bridge}"
 `claude -p` 放后台。先处理会卡住的 pending，再批量读 push。把下面的路径换成仓库检出：
 
 ```bash
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py pending "$CC_TASK_ID"
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" 4 '{"decision":"allow","reason":"只读，允许"}'
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py push "$CC_TASK_ID"
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py push "$CC_TASK_ID" --since 0
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py pending "$CC_TASK_ID"
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" 4 '{"decision":"allow","reason":"只读，允许"}'
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py push "$CC_TASK_ID"
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py push "$CC_TASK_ID" --since 0
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
 ```
 
 `pending` 只列出还没有回复的等待项。`push` 列出还没消费的通知并前进游标；`--since <seq>` 从该序号之后再列一次。`pending` 和 `push` 每行第一列就是完整路径，没有前缀；有摘要时在同一行路径后接一个 TAB 和 `# ...`，没有摘要时与以前逐字节一致。`watch` 每出现一条就打一行：`pending <路径>` 或 `push <路径>`，摘要同样用 TAB 接在路径后。摘要格式：Stop/SubagentStop `# reply: <回答第一行>`，PostToolUse `# response: <输出第一行>`，PostToolUseFailure `# error: <错误第一行>`，助手文本打开时 `# assistant: <文本第一行>`。加 `--once` 只打当前这一批。
@@ -111,18 +111,19 @@ python3 /path/to/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
 
 ```bash
 # PreToolUse
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"decision":"allow","reason":"看过完整命令"}'
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"decision":"deny","reason":"不要跑这条"}'
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"decision":"allow","reason":"看过完整命令"}'
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"decision":"deny","reason":"不要跑这条"}'
 
 # PermissionRequest。仓库内 Write 被 safetyCheck 挡住时，用 allow
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"decision":"allow","message":"允许写入这个文件"}'
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"decision":"allow","message":"允许写入这个文件"}'
 
 # Elicitation
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"decision":"accept"}'
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"decision":"accept"}'
 
 # Stop。没满足就 block，满足了 ack
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"decision":"block","reason":"补一个 n=30 的测试再跑"}'
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"ack":true}'
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"decision":"block","reason":"补一个 n=30 的测试再跑"}'
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"ack":true}'
+# 外部依赖这次解不了（runner 离线等）：ack，缺口写进 PR；不要同一理由反复 block，也不要抬 CC_BRIDGE_STOP_MAX_BLOCKS
 ```
 
 `PreToolUse` 的 `decision` 还可以是 `ask` 或 `defer`。超时：PreToolUse 和 PermissionRequest 拒绝，Elicitation 拒绝提问，Stop 放行结束。
@@ -163,14 +164,14 @@ PostToolUse 的通知带 `tool_response`，PostToolUseFailure 带 `error` 和 `i
 一个终端盯文件通道：
 
 ```bash
-python3 /path/to/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
 ```
 
 另一个终端看 Claude 自己的流。`--include-hook-events` 只是辅助，以 jsonl 为准：
 
 ```bash
 claude -p \
-  --plugin-dir /path/to/cc-cursor-bridge \
+  --plugin-dir ~/Sync/Test/cc-cursor-bridge \
   --output-format stream-json \
   --verbose \
   --include-hook-events \
@@ -206,7 +207,7 @@ WAIT 的 hook timeout 是 180 秒。等待本身默认 120 秒（`wait_all.timeo
 }
 ```
 
-命中后立刻 deny，不写 pending。换一份规则文件用 `CC_BRIDGE_RULES=/path/to/rules.json`。
+命中后立刻 deny，不写 pending，回复也不能改写（和 `rm -rf` / `.env` / `~/.ssh` 一样）。默认规则里的 `agent-artifact-dirs` 会拦 `.claude-flow/`、`.swarm/`：PR 前不要 `git add -A`，以免把这些产物目录带进提交。换一份规则文件用 `CC_BRIDGE_RULES=/path/to/rules.json`。
 
 ## 迁移到 AHP v1（0.2.0）
 
@@ -261,7 +262,7 @@ Claude Code 的 hook 不给推理（thinking）内容，所以 capabilities 里 
 
 - 仓库路径里的 Write 会被 Claude Code 的 safetyCheck 当成敏感文件。PreToolUse allow 挡不住，要在 PermissionRequest 上 allow。仓库外的同一条 Write 通常不用这一步。
 - 这 5 个事件在 `-p` 里没有触发出来：PermissionDenied、StopFailure、TeammateIdle、CwdChanged、DirectoryAdded。auto 模式没有稳定地拒绝命令；把 API 指到没人听的端口仍被本机代理接走；没有可用的 agent teams 开关；Bash `cd` 不改变会话目录；`/add-dir` 在这个环境里不可用。
-- Stop 最多 block 3 次。第 4 次即使再 block 也会结束。
+- Stop 最多 block 3 次（`stop.max_blocks` / `CC_BRIDGE_STOP_MAX_BLOCKS`，默认 3）。第 4 次即使再 block 也会结束。缺的是这次会话修不了的外部依赖时，应 `ack` 并把缺口写进 PR/报告；不要靠抬高 `CC_BRIDGE_STOP_MAX_BLOCKS` 空转。
 - 助手文本按 MessageDisplay 的 `delta` 推送，是片段而不是完整消息；要完整句子就按 `message_id` 聚合，或等 `final: true`。
 - 一次 fizzbuzz（含一次 Stop block，补了 n=30 的测试）大约 $0.04，7 个 pending，7 轮，大约 47 秒。
 

@@ -421,6 +421,7 @@
       "bash-git-push-force",
       "secret-env-file",
       "ssh-dir",
+      "agent-artifact-dirs",
       "no-sudo"
     ],
     "status": {
@@ -428,12 +429,13 @@
       "bash-git-push-force": "applied",
       "secret-env-file": "applied",
       "ssh-dir": "applied",
+      "agent-artifact-dirs": "applied",
       "no-sudo": "applied"
     },
     "required": [
       "no-sudo"
     ],
-    "sha256": "d037a039311757e1bbdbcc5e9cc4be209e1f5ebea10fa242e0a6263a89b544e1",
+    "sha256": "61550c6fb81dcdefb0af16eb93532ee5b545b39d908f9a2ced3a8d6aed34062f",
     "source": "config/rules.json"
   },
   "redaction": {

@@ -167,6 +167,26 @@ class BridgeTest(unittest.TestCase):
             else:
                 self.assertEqual(result.stdout, "", (tool_name, tool_input))
 
+
+    def test_agent_artifact_dirs_denied(self):
+        self.log_only("PreToolUse")
+        cases = [
+            ("Read", {"file_path": str(self.cwd / ".claude-flow" / "config.json")}, True),
+            ("Write", {"file_path": str(self.cwd / ".swarm" / "state.json"), "content": "x"}, True),
+            ("Glob", {"pattern": "**/*", "path": str(self.cwd / ".claude-flow")}, True),
+            ("Bash", {"command": "ls .claude-flow"}, True),
+            ("Bash", {"command": "git add .swarm/"}, True),
+            ("Read", {"file_path": str(self.cwd / "src" / "swarm" / "x.py")}, False),
+            ("Bash", {"command": "echo claude-flow"}, False),
+        ]
+        for tool_name, tool_input, expect_deny in cases:
+            result, lines = self.run_pre(tool_name, tool_input)
+            if expect_deny:
+                self.assertIn('"deny"', result.stdout, (tool_name, tool_input))
+                self.assertEqual(lines[-1]["rule_id"], "agent-artifact-dirs", (tool_name, tool_input))
+            else:
+                self.assertEqual(result.stdout, "", (tool_name, tool_input))
+
     def test_powershell_remove(self):
         result, lines = self.run_pre(
             "PowerShell", {"command": "Remove-Item -Recurse -Force scratch"}
