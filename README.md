@@ -111,6 +111,7 @@ claude plugin marketplace add ic-timon/cc-cursor-bridge
 | `bash-git-push-force` | `git push` 的 `--force`、短选项里的 `f`、`--force-with-lease` |
 | `secret-env-file` | 路径或命令里的 `.env`、`.env.*`。放行 `.env.example`、`.env.sample`、`.env.template` |
 | `ssh-dir` | `~/.ssh`、`$HOME/.ssh`，以及解析后落在用户主目录 `.ssh` 下的路径 |
+| `agent-artifact-dirs` | 路径或命令里的 `.claude-flow/`、`.swarm/`（agent 运行产物；PR 前不要 `git add -A`） |
 
 Grep 的搜索 pattern 不参与判断，只看 `path` 和 `glob`，避免搜源码里的字符串 `.env` 被误拦。项目里另有一个不是用户主目录的 `.ssh` 目录时不拦。`rm -r`（没有 `-f`）和 `git push origin +branch` 这种 refspec 不拦。
 
@@ -133,7 +134,7 @@ Grep 的搜索 pattern 不参与判断，只看 `path` 和 `glob`，避免搜源
 
 SessionStart 和 WorktreeCreate 在 `hooks.json` 里保持同步。SessionStart 不等回复，这样 `CC_BRIDGE_WATCH` 能注入 `watchPaths`；设了这个变量时，即使模式被改成 wait 也不等人。WorktreeCreate 自己执行 `git worktree add`，把路径打到 stdout，同时 push 一条通知。
 
-等待失败策略：PreToolUse 和 PermissionRequest 超时 deny，Elicitation 超时 decline，Stop 超时放行结束。Stop 的回复 `{"decision":"block","reason":"..."}` 会让 Claude Code 继续；`{"ack":true}` 结束。`stop_hook_active` 为 true 且没有明确 block 时放行。每个任务最多阻断 `stop.max_blocks` 次（默认 3）。
+等待失败策略：PreToolUse 和 PermissionRequest 超时 deny，Elicitation 超时 decline，Stop 超时放行结束。Stop 的回复 `{"decision":"block","reason":"..."}` 会让 Claude Code 继续；`{"ack":true}` 结束。`stop_hook_active` 为 true 且没有明确 block 时放行。每个任务最多阻断 `stop.max_blocks` 次（默认 3）。外部依赖这次解不了时 ack 并把缺口写进 PR/报告，不要抬高 `CC_BRIDGE_STOP_MAX_BLOCKS` 空转。
 
 助手命令：`python3 scripts/bridge.py pending <task>`、`reply <task> <seq> <json>`、`push <task> [--since <seq>]`、`watch <task>`。
 
@@ -281,7 +282,7 @@ Write `hello.txt` 没有被插件拒绝（PreToolUse 没有 decision），但这
 - `WorktreeCreate` 一旦注册就会替换 Claude Code 默认的 git worktree。脚本改为在 `<cwd>/.claude/worktrees/<slug>` 执行 `git worktree add`，分支名 `cc-bridge/<slug>`。失败时 worktree 创建失败。
 - `WorktreeRemove` 失败时不执行 `rm -rf`。
 - `git push origin +branch` 不拦。只有 `-f` 而没有 `-r` 的 `rm` 不拦。
-- 默认只有 PreToolUse、PermissionRequest、Elicitation、Stop 会等回复。PreToolUse 的 allow 会跳过该次权限提示。Stop 最多阻断 3 次。
+- 默认只有 PreToolUse、PermissionRequest、Elicitation、Stop 会等回复。PreToolUse 的 allow 会跳过该次权限提示。Stop 最多阻断 3 次。外部依赖解不了就 ack，不要抬 `CC_BRIDGE_STOP_MAX_BLOCKS`。
 - notifier 不发网络请求。
 - 日志字段会截断。
 - hook 依赖 `PATH` 里的 `python3`。脚本按 3.9 写，本机 Homebrew 3.14 和 `/usr/bin/python3` 3.9 都跑过单元测试。
