@@ -1569,5 +1569,164 @@ class AhpProducerTest(unittest.TestCase):
         self.assertTrue(any("reasoning_delta" in n and "reasoning" in n for n in caps["consumer_notes"]))
 
 
+class LaunchHelperTest(unittest.TestCase):
+    """scripts/run_claude_bridged.sh argv. No claude binary."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.home = self.root / "home"
+        self.home.mkdir()
+        self.prompt = self.root / "prompt.txt"
+        self.prompt.write_text("implement the widget\n", encoding="utf-8")
+        self.env = {
+            "HOME": str(self.home),
+            "PATH": os.environ.get("PATH", ""),
+            "CC_BRIDGE_DIR": str(self.root / "bridge"),
+        }
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_helper(self, args, env=None, input_text=None, stdin=None):
+        proc = subprocess.run(
+            ["bash", str(ROOT / "scripts" / "run_claude_bridged.sh"), *args],
+            input=input_text,
+            stdin=stdin,
+            text=True,
+            capture_output=True,
+            env=self.env if env is None else env,
+            check=False,
+        )
+        return proc
+
+    def parse_dry(self, stdout: str) -> tuple:
+        head, _, rest = stdout.partition("---argv---\n")
+        argv_text, _, _ = rest.partition("---end---")
+        meta = {}
+        for line in head.splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                meta[key] = value
+        argv = [line for line in argv_text.splitlines() if line != ""]
+        return meta, argv
+
+    def test_dry_run_keeps_prompt_off_argv(self):
+        proc = self.run_helper([
+            "--dry-run",
+            "--prompt-file", str(self.prompt),
+            "--allowed-tools", "Write,Edit,Read,Glob,Grep",
+            "--model", "haiku",
+            "--claude", "/no/such/claude",
+            "--",
+            "--debug-file", str(self.root / "debug.log"),
+            "--max-turns", "2",
+        ])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        meta, argv = self.parse_dry(proc.stdout)
+        self.assertEqual(argv[0], "/no/such/claude")
+        self.assertEqual(argv[1], "-p")
+        self.assertTrue(argv[2].startswith("--"), argv)
+        self.assertEqual(argv[argv.index("--plugin-dir") + 1], str(ROOT))
+        tools_at = argv.index("--allowedTools")
+        self.assertEqual(argv[tools_at + 1], "Write,Edit,Read,Glob,Grep")
+        self.assertEqual(argv[argv.index("--model") + 1], "haiku")
+        self.assertNotIn("implement the widget", argv)
+        self.assertNotIn("implement the widget\n", argv)
+        self.assertEqual(meta["prompt_on_argv"], "false")
+        self.assertTrue(meta["stdin"].startswith("file:"))
+        self.assertIn("stdin is used", meta["note"])
+        self.assertIn("--allowedTools cannot consume it", meta["note"])
+        task = meta["cc_task_id"]
+        self.assertRegex(task, r"^[0-9a-f]{32}$")
+        self.assertEqual(meta["stdout_log"], str(self.home / f"cc-{task}.jsonl"))
+        self.assertEqual(meta["stderr_log"], str(self.home / f"cc-{task}.err"))
+        self.assertFalse((self.home / f"cc-{task}.jsonl").exists())
+        joined = "\n".join(argv)
+        self.assertNotIn("dangerously-skip-permissions", joined)
+        self.assertNotIn("bypassPermissions", joined)
+
+    def test_preset_task_id_and_piped_stdin(self):
+        env = dict(self.env, CC_TASK_ID="taskabc")
+        proc = self.run_helper(["--dry-run", "--claude", "claude"], env=env, input_text="do the thing\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        meta, argv = self.parse_dry(proc.stdout)
+        self.assertEqual(meta["cc_task_id"], "taskabc")
+        self.assertEqual(meta["stdin"], "stdin")
+        self.assertEqual(meta["stdout_log"], str(self.home / "cc-taskabc.jsonl"))
+        self.assertEqual(meta["stderr_log"], str(self.home / "cc-taskabc.err"))
+        self.assertNotIn("do the thing", argv)
+        self.assertEqual(argv[1], "-p")
+        self.assertEqual(argv[2], "--plugin-dir")
+
+    def test_refuses_prompt_after_allowed_tools(self):
+        text = self.prompt.read_text(encoding="utf-8")
+        proc = self.run_helper([
+            "--dry-run",
+            "--prompt-file", str(self.prompt),
+            "--",
+            "--allowedTools", "Write", text,
+        ])
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("Input must be provided either through stdin or as a prompt argument", proc.stderr)
+        self.assertIn("--allowedTools", proc.stderr)
+
+    def test_refuses_bare_prompt_and_bypass(self):
+        bare = self.run_helper(["--dry-run", "--prompt-file", str(self.prompt), "--", "任务说明"])
+        self.assertEqual(bare.returncode, 2, bare.stderr)
+        self.assertIn("stdin", bare.stderr)
+        direct = self.run_helper(["--dry-run", "任务说明"])
+        self.assertEqual(direct.returncode, 2)
+        for flag in (
+            ["--", "--dangerously-skip-permissions"],
+            ["--", "--allow-dangerously-skip-permissions"],
+            ["--", "--permission-mode", "bypassPermissions"],
+            ["--", "--permission-mode=bypassPermissions"],
+        ):
+            proc = self.run_helper(["--dry-run", "--prompt-file", str(self.prompt), *flag])
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertIn("refusing", proc.stderr)
+
+    def test_refuses_bad_task_id_and_tty_without_prompt(self):
+        env = dict(self.env, CC_TASK_ID="../evil")
+        proc = self.run_helper(["--dry-run", "--prompt-file", str(self.prompt)], env=env)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("CC_TASK_ID", proc.stderr)
+        import pty
+        master, slave = pty.openpty()
+        try:
+            tty_proc = subprocess.run(
+                ["bash", str(ROOT / "scripts" / "run_claude_bridged.sh"), "--dry-run"],
+                stdin=slave,
+                text=True,
+                capture_output=True,
+                env=self.env,
+                check=False,
+            )
+        finally:
+            os.close(slave)
+            os.close(master)
+        self.assertEqual(tty_proc.returncode, 2)
+        self.assertIn("Input must be provided either through stdin or as a prompt argument", tty_proc.stderr)
+
+    def test_docs_use_stdin_launch(self):
+        usage = (ROOT / "docs" / "USAGE.md").read_text(encoding="utf-8")
+        skill = (ROOT / "cursor" / "skills" / "claude-code-bridge" / "SKILL.md").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        sandbox = (ROOT / "examples" / "sandbox" / "README.md").read_text(encoding="utf-8")
+        for text in (usage, skill, readme):
+            self.assertIn("run_claude_bridged.sh", text)
+            self.assertIn("Input must be provided either through stdin or as a prompt argument", text)
+        self.assertIn("--prompt-file", skill)
+        self.assertIn("< /tmp/cc-prompt.txt", skill)
+        self.assertNotIn('--allowedTools "Write,Edit,Read,Glob,Grep" \\\n  "任务说明"', skill)
+        self.assertIn("< prompt.txt", usage)
+        self.assertIn("~/cc-$CC_TASK_ID.jsonl", usage)
+        self.assertIn("~/cc-$CC_TASK_ID.err", usage)
+        self.assertIn("run_claude_bridged.sh", sandbox)
+        self.assertNotIn("dangerously-skip-permissions", usage.split("不要用", 1)[0])
+        self.assertNotIn("dangerously-skip-permissions", skill.split("不要用", 1)[0])
+
+
 if __name__ == "__main__":
     unittest.main()

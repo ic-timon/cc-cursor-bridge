@@ -29,6 +29,19 @@ export CC_BRIDGE_DIR="${CC_BRIDGE_DIR:-$HOME/.cc-bridge}"
 
 `--plugin-dir` 指到含 `.claude-plugin/plugin.json` 和 `claude/hooks/hooks.json` 的检出。本机用 **`~/Sync/Test/cc-cursor-bridge` 的 `main`**，不要写死旧功能分支名（例如曾经的 `feat/plugin-skeleton`）。这台 self-hosted worker 上的 cloud agent 不会从仓库或工作区的 `.cursor/skills/`、`~/.cursor/plugins/local`、`~/.agents/skills/` 加载这份 skill。它只在 Cursor 里做过 Customize → Skills 的 “Sync Skills for Cloud Agents” 之后才能看到。同步会把 `~/.cursor/skills/claude-code-bridge/` 移进 AgentStores；之后改了 skill 要再同步一次。
 
+Prompt 必须走 stdin。用检出里的 `scripts/run_claude_bridged.sh`：它固定 `claude -p`，`--plugin-dir` 指向该检出，prompt 只从 `--prompt-file` 或 stdin 读，`--allowedTools` 排在参数里因此吃不到 prompt。未设 `CC_TASK_ID` 时脚本会生成。标准输出在 `~/cc-$CC_TASK_ID.jsonl`，标准错误在 `~/cc-$CC_TASK_ID.err`。
+
+```bash
+export CC_TASK_ID="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+export CC_BRIDGE_DIR="${CC_BRIDGE_DIR:-$HOME/.cc-bridge}"
+~/Sync/Test/cc-cursor-bridge/scripts/run_claude_bridged.sh \
+  --cwd /path/to/repo \
+  --prompt-file /tmp/cc-prompt.txt \
+  --allowed-tools 'Write,Edit,Read,Glob,Grep'
+```
+
+不用脚本时，同样用重定向，不要把任务说明放在 argv 末尾：
+
 ```bash
 claude -p \
   --plugin-dir ~/Sync/Test/cc-cursor-bridge \
@@ -37,9 +50,13 @@ claude -p \
   --include-hook-events \
   --permission-mode acceptEdits \
   --permission-prompts none \
-  --allowedTools "Write,Edit,Read,Glob,Grep" \
-  "任务说明"
+  --allowedTools 'Write,Edit,Read,Glob,Grep' \
+  < /tmp/cc-prompt.txt \
+  > ~/cc-$CC_TASK_ID.jsonl \
+  2> ~/cc-$CC_TASK_ID.err
 ```
+
+`--allowedTools` 和 `--disallowedTools` 会吃掉后面的参数，直到下一个选项。不要写成 `claude -p --allowedTools "Write,Edit" "任务说明"`，也不要让这类 flag 夹在 `-p` 和 prompt 之间。那样 prompt 到不了 `-p`，stderr 是 `Input must be provided either through stdin or as a prompt argument`。只有 prompt 紧挨在 `-p` 后面、且后面没有 consuming flag 时，才可以用 `claude -p "$(cat prompt.txt)" --plugin-dir …`。启动例子一律走 stdin。`run_claude_bridged.sh --dry-run` 只打印 argv，并注明 stdin，不要求本机有 `claude`。
 
 权限：
 
@@ -161,6 +178,7 @@ notifier 默认关，而且当前版本即使打开也只把打算发给 Cursor 
 ## 出错怎么办
 
 - 任务目录或 `events.jsonl` 一直没有：`--plugin-dir` 没指到插件根，或 hook 找不到 `python3`。用 `--debug-file <日志> --debug=hooks` 重跑一次，看 hook 的 stderr。
+- stderr 是 `Input must be provided either through stdin or as a prompt argument`：prompt 被 `--allowedTools`（或别的 consuming flag）吃掉了，没有到达 `-p`。把 prompt 放进文件，用 `run_claude_bridged.sh --prompt-file` 或 `claude -p … < prompt.txt` 重跑，并换一个新的 `CC_TASK_ID`。
 - 流里出现 hook error：分发脚本把非 JSON 打到了 stdout，或脚本崩了。事件日志的 `summary.config_note` 会写配置回退。
 - `StopFailure`：这一轮是 API 错误。看 `summary.error`，不要改用户的代理配置。
 - pending 超时：插件已经按默认 deny。要重试就再跑一轮，或在超时前写入 reply。
