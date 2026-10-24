@@ -10,10 +10,13 @@
 
 ### Claude Code
 
-一次任务用 `--plugin-dir`，不改全局配置。本机 live 检出是 `~/Sync/Test/cc-cursor-bridge` 的 **`main`**（不要写死旧功能分支名，例如曾经的 `feat/plugin-skeleton`）：
+一次任务用 `--plugin-dir`，不改全局配置。本机 live 检出是 `~/Sync/Test/cc-cursor-bridge` 的 **`main`**（不要写死旧功能分支名，例如曾经的 `feat/plugin-skeleton`）。带 `-p` 时 prompt 走 stdin，不要写在参数末尾。完整启动见下面的「启动（prompt 走 stdin）」。
 
 ```bash
-claude --plugin-dir ~/Sync/Test/cc-cursor-bridge -p "任务说明"
+export CC_TASK_ID="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+~/Sync/Test/cc-cursor-bridge/scripts/run_claude_bridged.sh \
+  --prompt-file prompt.txt \
+  --allowed-tools 'Write,Edit,Read,Glob,Grep'
 ```
 
 要装进 Claude Code，用仓库里的 `.claude-plugin/marketplace.json`。marketplace 的名字是文件里的 `"name"`，也就是 `cc-cursor-bridge`。这条会把 marketplace 写进 Claude Code 的用户设置；不想改设置就只用上面的 `--plugin-dir`。
@@ -62,10 +65,10 @@ scripts/install_cursor_skill.sh
 把下面这段贴给这台 worker 上的 Cursor cloud agent，换成你的目录和任务：
 
 ```text
-用 claude-code-bridge 让本机 Claude Code 在 <dir> 里实现 <任务>，按默认策略审批。插件用 --plugin-dir 指到 ~/Sync/Test/cc-cursor-bridge（main，不要写死 feat/plugin-skeleton 等旧分支）。危险命令直接拒绝。PreToolUse 和 PermissionRequest 看完再 allow。仓库路径里的 Write 如果被 safetyCheck 挡住，用 PermissionRequest allow。Stop 时验收：测试或要求没满足就 block，并写明缺什么；若缺的是这次会话解不了的外部依赖（例如 CI runner 离线、公平队列被压测占满），不要反复用同一理由 block Stop，也不要抬高 CC_BRIDGE_STOP_MAX_BLOCKS 空转——ack 结束，把缺口写进 PR/报告。不要用 bypass 权限，不要改 cc-switch。提交前不要 git add -A（.claude-flow/、.swarm/ 等产物目录会被默认规则拒绝，也不该进 PR）。
+用 claude-code-bridge 让本机 Claude Code 在 <dir> 里实现 <任务>，按默认策略审批。插件用 --plugin-dir 指到 ~/Sync/Test/cc-cursor-bridge（main，不要写死 feat/plugin-skeleton 等旧分支）。用 scripts/run_claude_bridged.sh 启动，prompt 放文件从 stdin 送入；不要把任务说明写在 --allowedTools 后面。危险命令直接拒绝。PreToolUse 和 PermissionRequest 看完再 allow。仓库路径里的 Write 如果被 safetyCheck 挡住，用 PermissionRequest allow。Stop 时验收：测试或要求没满足就 block，并写明缺什么；若缺的是这次会话解不了的外部依赖（例如 CI runner 离线、公平队列被压测占满），不要反复用同一理由 block Stop，也不要抬高 CC_BRIDGE_STOP_MAX_BLOCKS 空转——ack 结束，把缺口写进 PR/报告。不要用 bypass 权限，不要改 cc-switch。提交前不要 git add -A（.claude-flow/、.swarm/ 等产物目录会被默认规则拒绝，也不该进 PR）。
 ```
 
-Agent 会做这些事：用 `--plugin-dir ~/Sync/Test/cc-cursor-bridge` 在后台启动 `claude -p`，循环 `pending` 然后 `reply`，用 `push` 批量读通知，在 Stop 上做验收。
+Agent 会做这些事：用 `scripts/run_claude_bridged.sh`（`--plugin-dir` 指向 `~/Sync/Test/cc-cursor-bridge`）在后台启动 `claude -p`，prompt 走 stdin，循环 `pending` 然后 `reply`，用 `push` 批量读通知，在 Stop 上做验收。
 
 ## 自己用命令行
 
@@ -90,6 +93,45 @@ export CC_BRIDGE_DIR="${CC_BRIDGE_DIR:-$HOME/.cc-bridge}"
 | `CC_BRIDGE_LEGACY` | `0` 时不写旧格式目录（只写 AHP）；`pending`/`push`/`watch`/`reply` 也随之走 AHP 目录。默认 `1` |
 
 日志在 `$CC_BRIDGE_DIR/tasks/$CC_TASK_ID/events.jsonl`。AHP v1 的同一批事件在 `$CC_BRIDGE_DIR/ahp/tasks/$CC_TASK_ID/`，见下面的「迁移到 AHP v1（0.2.0）」。
+
+### 启动（prompt 走 stdin）
+
+`claude -p` 的 prompt 用文件重定向，或用 `scripts/run_claude_bridged.sh`。脚本会设好 `CC_TASK_ID`（未设就生成），`--plugin-dir` 指向本仓库，把 Claude 的标准输出写到 `~/cc-$CC_TASK_ID.jsonl`，标准错误写到 `~/cc-$CC_TASK_ID.err`。prompt 只从 `--prompt-file` 或 stdin 读，不会放进 argv。
+
+```bash
+export CC_TASK_ID="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+export CC_BRIDGE_DIR="${CC_BRIDGE_DIR:-$HOME/.cc-bridge}"
+~/Sync/Test/cc-cursor-bridge/scripts/run_claude_bridged.sh \
+  --cwd /path/to/repo \
+  --prompt-file prompt.txt \
+  --allowed-tools 'Write,Edit,Read,Glob,Grep'
+```
+
+不用脚本时，同样把 prompt 放在重定向里，consuming flag 放在命令上、不要放在 prompt 前面等着去吃它：
+
+```bash
+claude -p \
+  --plugin-dir ~/Sync/Test/cc-cursor-bridge \
+  --output-format stream-json \
+  --verbose \
+  --include-hook-events \
+  --permission-mode acceptEdits \
+  --permission-prompts none \
+  --allowedTools 'Write,Edit,Read,Glob,Grep' \
+  < prompt.txt \
+  > ~/cc-$CC_TASK_ID.jsonl \
+  2> ~/cc-$CC_TASK_ID.err
+```
+
+`--allowedTools`、`--disallowedTools` 以及其它会吃掉后续参数直到下一个选项的 flag，是 consuming flag。它们不能夹在 `-p` 和 prompt 之间，也不能排在末尾那个 prompt 参数前面。kio 的一次启动写成 `claude -p --plugin-dir <repo> --allowedTools … "<prompt>"`，prompt 被 `--allowedTools` 吃掉，Claude 的 stderr 是 `Input must be provided either through stdin or as a prompt argument`。恢复时把 prompt 放进文件从 stdin 送入，并换一个新的 `CC_TASK_ID`。
+
+不要这样写：
+
+```bash
+claude -p --plugin-dir ~/Sync/Test/cc-cursor-bridge --allowedTools "Write,Edit" "任务说明"
+```
+
+只有在 prompt 是 `-p` 的紧邻下一个参数、且后面不再跟 consuming flag 时，才可以不用重定向：`claude -p "$(cat prompt.txt)" --plugin-dir …`。文档里的启动例子一律走 stdin。`run_claude_bridged.sh --dry-run` 只打印 argv，并注明 prompt 走 stdin，不需要本机有 `claude`。
 
 ### pending、reply、push、watch
 
@@ -167,16 +209,10 @@ PostToolUse 的通知带 `tool_response`，PostToolUseFailure 带 `error` 和 `i
 python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
 ```
 
-另一个终端看 Claude 自己的流。`--include-hook-events` 只是辅助，以 jsonl 为准：
+另一个终端看 Claude 自己的流（`run_claude_bridged.sh` 写到 `~/cc-$CC_TASK_ID.jsonl`，标准错误在 `~/cc-$CC_TASK_ID.err`）。`--include-hook-events` 只是辅助，以 bridge 的 jsonl 为准：
 
 ```bash
-claude -p \
-  --plugin-dir ~/Sync/Test/cc-cursor-bridge \
-  --output-format stream-json \
-  --verbose \
-  --include-hook-events \
-  --permission-mode acceptEdits \
-  "任务说明"
+tail -f ~/cc-$CC_TASK_ID.jsonl
 ```
 
 结束看进程退出码，以及流里 `"type":"result"` 那一行。Stop 被 ack 之后进程才会真正停。
@@ -260,6 +296,7 @@ Claude Code 的 hook 不给推理（thinking）内容，所以 capabilities 里 
 
 ## 容易踩的坑
 
+- `--allowedTools` 会吃掉它后面的参数，直到下一个选项。prompt 写在它后面时到不了 `-p`，stderr 是 `Input must be provided either through stdin or as a prompt argument`（kio 的 TLS agent 第一次启动）。启动一律用 stdin：`scripts/run_claude_bridged.sh --prompt-file …`，或 `claude -p … < prompt.txt`。详见「启动（prompt 走 stdin）」。
 - 仓库路径里的 Write 会被 Claude Code 的 safetyCheck 当成敏感文件。PreToolUse allow 挡不住，要在 PermissionRequest 上 allow。仓库外的同一条 Write 通常不用这一步。
 - 这 5 个事件在 `-p` 里没有触发出来：PermissionDenied、StopFailure、TeammateIdle、CwdChanged、DirectoryAdded。auto 模式没有稳定地拒绝命令；把 API 指到没人听的端口仍被本机代理接走；没有可用的 agent teams 开关；Bash `cd` 不改变会话目录；`/add-dir` 在这个环境里不可用。
 - Stop 最多 block 3 次（`stop.max_blocks` / `CC_BRIDGE_STOP_MAX_BLOCKS`，默认 3）。第 4 次即使再 block 也会结束。缺的是这次会话修不了的外部依赖时，应 `ack` 并把缺口写进 PR/报告；不要靠抬高 `CC_BRIDGE_STOP_MAX_BLOCKS` 空转。

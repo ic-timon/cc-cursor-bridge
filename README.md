@@ -16,6 +16,7 @@ Claude Code 插件加 Cursor skill。Cursor agent 在这台 Mac 上调用本机 
 claude/hooks/hooks.json             33 个 hook，全部进 scripts/dispatch.py
 scripts/dispatch.py                 hook 入口
 scripts/bridge.py                   日志、规则、等待、notifier 调用点
+scripts/run_claude_bridged.sh       claude -p 启动；prompt 走 stdin，避开 --allowedTools
 scripts/test_bridge.py              不联网的单元测试
 config/rules.json                   危险操作规则，可关、可加
 config/bridge.json                  notifier 与等待通道，默认都关
@@ -50,6 +51,8 @@ Cursor 还会从 `.claude/skills/` 加载 skill。这个仓库没有 `.claude/sk
 ```bash
 claude --plugin-dir /path/to/cc-cursor-bridge
 ```
+
+带 `-p` 跑任务时，prompt 从 stdin 送入，用 `scripts/run_claude_bridged.sh --prompt-file prompt.txt`（或 `claude -p --plugin-dir /path/to/cc-cursor-bridge … < prompt.txt`）。不要把任务说明放在 `--allowedTools` 后面：那个 flag 会吃掉后续参数，Claude 的 stderr 是 `Input must be provided either through stdin or as a prompt argument`。见 [docs/USAGE.md](docs/USAGE.md)。
 
 本地 marketplace（会写入 Claude Code 的 marketplace 配置，自测没有跑这条）：
 
@@ -187,7 +190,7 @@ PUSH/LOG 的 hook 是 `async: true`（timeout 30，SessionEnd 55，因为官方 
 
 ## Cursor 插件
 
-`.cursor-plugin/plugin.json` 和 `.claude-plugin/` 都在仓库根上。Cursor 侧只有一个 skill：`claude-code-bridge`。内容是怎么生成 `CC_TASK_ID`、怎么用 `claude -p --output-format stream-json --verbose` 启动、推荐的权限参数（不用 bypass）、事件文件在哪、怎么读、怎么写 pending 回复、怎么判断结束、出错怎么办。
+`.cursor-plugin/plugin.json` 和 `.claude-plugin/` 都在仓库根上。Cursor 侧只有一个 skill：`claude-code-bridge`。内容是怎么生成 `CC_TASK_ID`、怎么用 `scripts/run_claude_bridged.sh`（`claude -p`，prompt 走 stdin，`--output-format stream-json --verbose`）启动、推荐的权限参数（不用 bypass）、事件文件在哪、怎么读、怎么写 pending 回复、怎么判断结束、出错怎么办。
 
 装到本机 Cursor IDE（复制，不用 symlink；指向仓库外部的 symlink 会被跳过）：
 
@@ -251,7 +254,7 @@ python3 scripts/test_bridge.py
 /usr/bin/python3 scripts/test_bridge.py
 ```
 
-两条都应通过（0.2.0 起 51 个测试，其中 15 个是 AHP v1 和 fail-closed）。AHP v1 一致性：
+两条都应通过（当前 65 个测试，含 `run_claude_bridged.sh --dry-run`）。AHP v1 一致性：
 
 ```bash
 python3 -m conformance --producer cc-adapter
