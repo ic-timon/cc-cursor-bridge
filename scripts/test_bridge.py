@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -329,6 +330,7 @@ class BridgeTest(unittest.TestCase):
         self.assertFalse(cfg["wait"]["enabled"])
         self.assertFalse(cfg["wait_all"]["enabled"])
         self.assertFalse(cfg["assistant_text"]["enabled"])
+        self.assertFalse(cfg["auto_allow"]["cwd_read"])
         self.assertEqual(cfg["events"]["PreToolUse"], "wait")
         self.assertEqual(cfg["events"]["PostToolUse"], "push")
         self.assertEqual(cfg["events"]["MessageDisplay"], "log")
@@ -573,13 +575,34 @@ class BridgeTest(unittest.TestCase):
         command = "echo " + ("Z" * 40)
         content = "Y" * 30
         edits = [{"old_string": "A" * 20, "new_string": "b"}]
-        bridge.handle_event(
-            self.pre("Bash", {"command": command, "content": content, "edits": edits}),
-            self.environ,
-            cfg=cfg,
-        )
         pending = self.bridge_dir / "tasks" / "task1" / "pending"
-        short = json.loads(next(p for p in pending.glob("*-PreToolUse.json") if not p.name.endswith(".full.json")).read_text(encoding="utf-8"))
+        copied: dict = {}
+        stop = threading.Event()
+
+        def snap() -> None:
+            while not stop.is_set():
+                if pending.is_dir():
+                    for path in pending.glob("*.json"):
+                        if path.name not in copied:
+                            try:
+                                copied[path.name] = path.read_text(encoding="utf-8")
+                            except OSError:
+                                pass
+                time.sleep(0.01)
+
+        watcher = threading.Thread(target=snap)
+        watcher.start()
+        try:
+            bridge.handle_event(
+                self.pre("Bash", {"command": command, "content": content, "edits": edits}),
+                self.environ,
+                cfg=cfg,
+            )
+        finally:
+            stop.set()
+            watcher.join(2)
+        self.assertFalse(any(pending.glob("*.json")))
+        short = json.loads(next(text for name, text in copied.items() if name.endswith("-PreToolUse.json") and not name.endswith(".full.json")))
         field = short["tool_input"]["command"]
         self.assertTrue(field["truncated"])
         self.assertEqual(field["original_length"], len(command))
@@ -588,7 +611,7 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(short["tool_input"]["content"]["original_length"], len(content))
         self.assertTrue(short["tool_input"]["edits"][0]["old_string"]["truncated"])
         self.assertTrue(short["truncated"])
-        full = json.loads(next(pending.glob("*.full.json")).read_text(encoding="utf-8"))
+        full = json.loads(next(text for name, text in copied.items() if name.endswith(".full.json")))
         self.assertEqual(full["tool_input"]["command"], command)
         self.assertEqual(full["tool_input"]["content"], content)
         self.assertEqual(full["tool_input"]["edits"], edits)
@@ -723,16 +746,30 @@ class BridgeTest(unittest.TestCase):
             self.assertIn("stdout", pushed.stdout)
 
             self.environ["CC_BRIDGE_EVENT_MODE_Stop"] = "wait"
-            self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.2"
-            bridge.handle_event(
-                {
-                    "hook_event_name": "Stop",
-                    "session_id": "sess",
-                    "cwd": str(self.cwd),
-                    "last_assistant_message": "等待验收\n细节",
-                },
-                self.environ,
-            )
+            self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "5"
+            box: dict = {}
+
+            def run_stop() -> None:
+                box["result"] = bridge.handle_event(
+                    {
+                        "hook_event_name": "Stop",
+                        "session_id": "sess",
+                        "cwd": str(self.cwd),
+                        "last_assistant_message": "等待验收\n细节",
+                    },
+                    self.environ,
+                )
+
+            worker = threading.Thread(target=run_stop, daemon=True)
+            worker.start()
+            pending_dir = self.bridge_dir / "tasks" / "task1" / "pending"
+            appeared = False
+            for _ in range(100):
+                if pending_dir.is_dir() and any(pending_dir.glob("*-Stop.json")):
+                    appeared = True
+                    break
+                time.sleep(0.03)
+            self.assertTrue(appeared)
             pending = bridge.cli(["pending", "task1"])
             self.assertIn("reply: 等待验收", pending.stdout)
 
@@ -749,6 +786,12 @@ class BridgeTest(unittest.TestCase):
             self.assertEqual(watched.returncode, 0, watched.stderr)
             self.assertIn("reply: 已完成 fizzbuzz", watched.stdout)
             self.assertIn("reply: 等待验收", watched.stdout)
+            replies = self.bridge_dir / "tasks" / "task1" / "replies"
+            replies.mkdir(parents=True, exist_ok=True)
+            for item in pending_dir.glob("*-Stop.json"):
+                seq = item.name.split("-", 1)[0]
+                (replies / f"{seq}.json").write_text(json.dumps({"ack": True}), encoding="utf-8")
+            worker.join(5)
         finally:
             if previous is None:
                 os.environ.pop("CC_BRIDGE_DIR", None)
@@ -862,11 +905,23 @@ class BridgeTest(unittest.TestCase):
 
     def test_pending_output_is_path_only_without_annotation(self):
         self.environ["CC_BRIDGE_WAIT_ALL"] = "1"
-        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.2"
-        result, _ = self.run_pre("Bash", {"command": "echo hi"})
-        self.assertIn('"deny"', result.stdout)
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "5"
+        box: dict = {}
+
+        def run() -> None:
+            box["result"] = self.run_pre("Bash", {"command": "echo hi"})
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
         pending = self.bridge_dir / "tasks" / "task1" / "pending"
-        path = next(pending.glob("*-PreToolUse.json"))
+        path = None
+        for _ in range(100):
+            files = [item for item in pending.glob("*-PreToolUse.json") if not item.name.endswith(".full.json")] if pending.is_dir() else []
+            if files:
+                path = files[0]
+                break
+            time.sleep(0.03)
+        self.assertIsNotNone(path)
         previous = os.environ.get("CC_BRIDGE_DIR")
         os.environ["CC_BRIDGE_DIR"] = str(self.bridge_dir)
         try:
@@ -877,18 +932,40 @@ class BridgeTest(unittest.TestCase):
             else:
                 os.environ["CC_BRIDGE_DIR"] = previous
         self.assertEqual(listed.stdout, f"{path}\n")
+        seq = path.name.split("-", 1)[0]
+        replies = self.bridge_dir / "tasks" / "task1" / "replies"
+        replies.mkdir(parents=True, exist_ok=True)
+        (replies / f"{seq}.json").write_text(json.dumps({"decision": "allow"}), encoding="utf-8")
+        worker.join(5)
+        self.assertFalse(path.exists())
+        self.assertIn('"allow"', box["result"][0].stdout)
 
     def test_pending_push_and_watch_annotations_follow_tab(self):
-        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.2"
-        bridge.handle_event(
-            {
-                "hook_event_name": "Stop",
-                "session_id": "sess",
-                "cwd": str(self.cwd),
-                "last_assistant_message": "等待验收\n细节",
-            },
-            self.environ,
-        )
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "5"
+        box: dict = {}
+
+        def run() -> None:
+            box["result"] = bridge.handle_event(
+                {
+                    "hook_event_name": "Stop",
+                    "session_id": "sess",
+                    "cwd": str(self.cwd),
+                    "last_assistant_message": "等待验收\n细节",
+                },
+                self.environ,
+            )
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        pending = self.bridge_dir / "tasks" / "task1" / "pending"
+        path = None
+        for _ in range(100):
+            files = [item for item in pending.glob("*-Stop.json") if not item.name.endswith(".full.json")] if pending.is_dir() else []
+            if files:
+                path = files[0]
+                break
+            time.sleep(0.03)
+        self.assertIsNotNone(path)
         self.environ["CC_BRIDGE_ASSISTANT_TEXT"] = "1"
         bridge.handle_event(
             {
@@ -933,7 +1010,21 @@ class BridgeTest(unittest.TestCase):
                 f"push {push_path}\t# assistant: 正在创建 fizzbuzz.py",
                 watched.stdout,
             )
+            seq = pending_path.name.split("-", 1)[0]
+            replies = self.bridge_dir / "tasks" / "task1" / "replies"
+            replies.mkdir(parents=True, exist_ok=True)
+            (replies / f"{seq}.json").write_text(json.dumps({"ack": True}), encoding="utf-8")
+            worker.join(5)
+            self.assertFalse(pending_path.exists())
         finally:
+            if worker.is_alive():
+                # Unblock the gate if an assertion failed before the reply was written.
+                replies = self.bridge_dir / "tasks" / "task1" / "replies"
+                replies.mkdir(parents=True, exist_ok=True)
+                for item in pending.glob("*-Stop.json"):
+                    seq = item.name.split("-", 1)[0]
+                    (replies / f"{seq}.json").write_text(json.dumps({"ack": True}), encoding="utf-8")
+                worker.join(5)
             if previous is None:
                 os.environ.pop("CC_BRIDGE_DIR", None)
             else:
@@ -973,7 +1064,9 @@ class BridgeTest(unittest.TestCase):
         try:
             listed = bridge.cli(["pending", "task1"])
             self.assertEqual(listed.code, 0)
-            self.assertIn("2-PreToolUse.json", listed.stdout)
+            self.assertNotIn("PreToolUse.json", listed.stdout)
+            self.assertFalse(any((self.bridge_dir / "tasks" / "task1" / "pending").glob("*-PreToolUse.json")))
+            self.assertTrue((self.bridge_dir / "tasks" / "task1" / "events.jsonl").is_file())
             wrote = bridge.cli(["reply", "task1", "99", '{"ack": true}'])
             self.assertEqual(wrote.code, 0)
             self.assertTrue((self.bridge_dir / "tasks" / "task1" / "replies" / "99.json").is_file())
@@ -1214,17 +1307,19 @@ class AhpProducerTest(unittest.TestCase):
         caps = json.loads((self.ahp / "capabilities.json").read_text(encoding="utf-8"))
         self.assertEqual(caps["protocol"], "ahp/1")
         self.assertEqual(caps["events"]["tool.pre"]["class"], "gate")
-        self.assertTrue((self.ahp / "pending" / "1-tool.pre.json").is_file())
-        self.assertTrue((self.legacy / "pending" / "1-PreToolUse.json").is_file())
+        self.assertFalse((self.ahp / "pending" / "1-tool.pre.json").exists())
+        self.assertFalse((self.legacy / "pending" / "1-PreToolUse.json").exists())
+        self.assertTrue((self.ahp / "events.jsonl").is_file())
+        self.assertTrue((self.legacy / "events.jsonl").is_file())
         ack = self.ack(1)
         self.assertEqual((ack["status"], ack["via"], ack["applied_decision"]), ("expired", "timeout", "deny"))
         record = self.records()[-1]
         self.assertEqual(record["outcome"]["via"], "timeout")
         self.assertEqual(record["payload"]["tool_kind"], "shell")
         self.assertEqual(record["payload"]["command"], "echo hi")
-        legacy = json.loads((self.legacy / "pending" / "1-PreToolUse.json").read_text(encoding="utf-8"))
-        self.assertEqual(legacy["default_decision"], "deny")  # additive fields only
-        self.assertIn("deadline", legacy)
+        approvals = [json.loads(x) for x in (self.legacy / "approvals.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+        self.assertEqual(approvals[-1]["via"], "timeout")
+        self.assertEqual(approvals[-1]["decision"], "deny")
 
     def test_invalid_reply_denies_never_host_default(self):
         for raw in ('{"decision": "maybe"}', "{not json", '{"decision": "allow", "updatedinput": {}}',
@@ -1336,7 +1431,17 @@ class AhpProducerTest(unittest.TestCase):
     def test_cli_ahp_pending_and_reply_validation(self):
         self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.2"
         bridge.handle_event(self.event(), self.environ)
-        # leave an open AHP pending without ack to list it
+        # The gate removes its pending file. Put an open notice back so the CLI
+        # still has something to list once the ack is gone.
+        self.assertFalse((self.ahp / "pending" / "1-tool.pre.json").exists())
+        notice = self.ahp / "pending" / "1-tool.pre.json"
+        notice.parent.mkdir(parents=True, exist_ok=True)
+        notice.write_text(json.dumps({
+            "event": "tool.pre",
+            "seq": 1,
+            "class": "gate",
+            "decisions": ["allow", "deny", "ask"],
+        }) + "\n", encoding="utf-8")
         (self.ahp / "acks" / "1.json").unlink()
         previous = os.environ.get("CC_BRIDGE_DIR")
         os.environ["CC_BRIDGE_DIR"] = str(self.bridge_dir)
@@ -1383,7 +1488,8 @@ class AhpProducerTest(unittest.TestCase):
         self.environ.update(CC_BRIDGE_AHP="0", CC_BRIDGE_WAIT_ALL_TIMEOUT="0.2")
         bridge.handle_event(self.event(), self.environ)
         self.assertFalse((self.bridge_dir / "ahp").exists())
-        self.assertTrue((self.legacy / "pending" / "1-PreToolUse.json").is_file())
+        self.assertFalse((self.legacy / "pending" / "1-PreToolUse.json").exists())
+        self.assertTrue((self.legacy / "events.jsonl").is_file())
 
     def test_additional_context_limit_and_event_fields(self):
         # draft.3 spec 7.3: over CC's 10,000-char cap is invalid, never truncated
@@ -1481,9 +1587,15 @@ class AhpProducerTest(unittest.TestCase):
         env = self.narrow_env()
         import time
 
+        seen: dict = {}
+
         def reply():
             for _ in range(100):
-                if (self.legacy / "pending" / "toolu_narrow.json").is_file():
+                legacy = self.legacy / "pending" / "toolu_narrow.json"
+                ahp_files = list((self.ahp / "pending").glob("*-permission.request.json")) if (self.ahp / "pending").is_dir() else []
+                if legacy.is_file() and ahp_files:
+                    seen["legacy_names"] = sorted(p.name for p in (self.legacy / "pending").glob("*.json"))
+                    seen["ahp"] = ahp_files[0].read_text(encoding="utf-8")
                     (self.legacy / "replies").mkdir(parents=True, exist_ok=True)
                     (self.legacy / "replies" / "toolu_narrow.json").write_text(
                         json.dumps({"decision": "allow", "reason": "ok"}), encoding="utf-8")
@@ -1495,17 +1607,17 @@ class AhpProducerTest(unittest.TestCase):
         result = bridge.handle_event(self.perm_event(), env)
         t.join(3)
         self.assertIn('"allow"', result.stdout)
-        # legacy: only the old narrow file, no <seq>-<Hook>.json
-        self.assertEqual(sorted(f.name for f in (self.legacy / "pending").glob("*.json")), ["toolu_narrow.json"])
+        # legacy: only the old narrow file was written, not <seq>-<Hook>.json, and it is gone now
+        self.assertEqual(seen["legacy_names"], ["toolu_narrow.json"])
+        self.assertEqual(list((self.legacy / "pending").glob("*.json")), [])
+        self.assertTrue((self.legacy / "replies" / "toolu_narrow.json").is_file())
         line = [json.loads(x) for x in (self.legacy / "events.jsonl").read_text().splitlines()][-1]
         self.assertEqual((line["channel"], line["pending_id"], line["summary"]["wait"]), ("log", "toolu_narrow", "reply"))
-        # AHP: capabilities declare the gate, pending + consumed ack exist
         caps = json.loads((self.ahp / "capabilities.json").read_text())
         self.assertEqual(caps["events"]["permission.request"]["class"], "gate")
         self.assertEqual(caps["events"]["tool.pre"]["class"], "log")  # on_pre_tool_use is off
-        pend = list((self.ahp / "pending").glob("*-permission.request.json"))
-        self.assertEqual(len(pend), 1)
-        env_json = json.loads(pend[0].read_text())
+        self.assertEqual(list((self.ahp / "pending").glob("*-permission.request.json")), [])
+        env_json = json.loads(seen["ahp"])
         self.assertEqual((env_json["class"], env_json["default_decision"]), ("gate", "deny"))
         seq = env_json["seq"]
         ack = json.loads((self.ahp / "acks" / f"{seq}.json").read_text())
@@ -1552,7 +1664,9 @@ class AhpProducerTest(unittest.TestCase):
         env = self.narrow_env(CC_BRIDGE_AHP="0", CC_BRIDGE_WAIT_TIMEOUT="0.2")
         result = bridge.handle_event(self.perm_event(), env)
         self.assertIn('"deny"', result.stdout)
-        self.assertTrue((self.legacy / "pending" / "toolu_narrow.json").is_file())
+        self.assertFalse((self.legacy / "pending" / "toolu_narrow.json").exists())
+        self.assertTrue((self.legacy / "events.jsonl").is_file())
+        self.assertTrue((self.legacy / "approvals.jsonl").is_file())
         self.assertFalse(self.ahp.exists())
 
     def test_reasoning_delta_request_is_partial(self):
@@ -1567,6 +1681,144 @@ class AhpProducerTest(unittest.TestCase):
         self.assertFalse(caps["features"]["reasoning_delta"])
         self.assertEqual(caps["consumer_json"], "partially_applied")
         self.assertTrue(any("reasoning_delta" in n and "reasoning" in n for n in caps["consumer_notes"]))
+
+
+    def approvals(self, tree="legacy"):
+        base = self.legacy if tree == "legacy" else self.ahp
+        path = base / "approvals.jsonl"
+        self.assertTrue(path.is_file(), tree)
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    def test_pending_removed_after_reply_and_timeout(self):
+        seen = {}
+
+        def reply():
+            for _ in range(80):
+                files = list((self.legacy / "pending").glob("*-PreToolUse.json")) if (self.legacy / "pending").is_dir() else []
+                ahp = list((self.ahp / "pending").glob("*-tool.pre.json")) if (self.ahp / "pending").is_dir() else []
+                if files and ahp:
+                    seen["legacy"] = files[0].name
+                    seen["ahp"] = ahp[0].name
+                    seq = files[0].name.split("-", 1)[0]
+                    (self.legacy / "replies").mkdir(parents=True, exist_ok=True)
+                    (self.legacy / "replies" / f"{seq}.json").write_text(
+                        json.dumps({"decision": "allow", "reason": "ok"}), encoding="utf-8")
+                    return
+                time.sleep(0.03)
+
+        thread = threading.Thread(target=reply)
+        thread.start()
+        result = bridge.handle_event(self.event(), self.environ)
+        thread.join(3)
+        self.assertIn('"allow"', result.stdout)
+        self.assertTrue(seen.get("legacy") and seen.get("ahp"))
+        self.assertFalse((self.legacy / "pending" / seen["legacy"]).exists())
+        self.assertFalse((self.ahp / "pending" / seen["ahp"]).exists())
+        seq = seen["legacy"].split("-", 1)[0]
+        self.assertTrue((self.legacy / "replies" / f"{seq}.json").is_file())
+        self.assertTrue((self.legacy / "events.jsonl").is_file())
+        self.assertTrue((self.ahp / "events.jsonl").is_file())
+        self.assertEqual(self.ack(int(seq))["status"], "consumed")
+
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.2"
+        result = bridge.handle_event(self.event(tool_use_id="toolu_to"), self.environ)
+        self.assertIn('"deny"', result.stdout)
+        self.assertFalse(any((self.legacy / "pending").glob("*.json")))
+        self.assertFalse(any((self.ahp / "pending").glob("*.json")))
+        self.assertEqual(self.approvals()[-1]["via"], "timeout")
+        self.assertTrue((self.legacy / "events.jsonl").is_file())
+
+    def test_approvals_log_rule_deny_and_reply(self):
+        secret = "super-secret-key"
+        self.environ["CC_BRIDGE_CURSOR_API_KEY"] = secret
+        bridge.handle_event(self.event(tool_input={"command": "rm -rf scratch"}), self.environ)
+        denied = self.approvals()[0]
+        self.assertEqual(denied["via"], "rule")
+        self.assertEqual(denied["decision"], "deny")
+        self.assertEqual(denied["rule_id"], "bash-rm-rf")
+        self.assertEqual(denied["tool"], "Bash")
+        self.assertEqual(denied["event"], "PreToolUse")
+        self.assertTrue(denied.get("seq"))
+        self.assertIn("ts", denied)
+        self.assertNotIn(secret, json.dumps(denied))
+        ahp_denied = self.approvals("ahp")[0]
+        self.assertEqual((ahp_denied["via"], ahp_denied["rule_id"]), ("rule", "bash-rm-rf"))
+        self.assertFalse((self.ahp / "pending").is_dir() and any((self.ahp / "pending").glob("*.json")))
+
+        def reply():
+            for _ in range(80):
+                files = list((self.legacy / "pending").glob("*-PreToolUse.json")) if (self.legacy / "pending").is_dir() else []
+                if files:
+                    seq = files[0].name.split("-", 1)[0]
+                    (self.legacy / "replies").mkdir(parents=True, exist_ok=True)
+                    (self.legacy / "replies" / f"{seq}.json").write_text(
+                        json.dumps({"decision": "deny", "reason": f"nope {secret}"}), encoding="utf-8")
+                    return
+                time.sleep(0.03)
+
+        thread = threading.Thread(target=reply)
+        thread.start()
+        result = bridge.handle_event(self.event(tool_input={"command": "echo hi"}), self.environ)
+        thread.join(3)
+        self.assertIn('"deny"', result.stdout)
+        allowed = self.approvals()[-1]
+        self.assertEqual(allowed["via"], "reply")
+        self.assertEqual(allowed["decision"], "deny")
+        self.assertNotIn("rule_id", allowed)
+        self.assertNotIn(secret, json.dumps(allowed))
+        self.assertIn("[redacted]", allowed["reason"])
+        blob = (self.ahp / "approvals.jsonl").read_text(encoding="utf-8")
+        self.assertNotIn(secret, blob)
+        self.assertIn("[redacted]", blob)
+
+    def test_cwd_read_auto_allow_default_off_and_rules_win(self):
+        inside = self.cwd / "note.txt"
+        inside.write_text("hello\n", encoding="utf-8")
+        outside = self.root / "outside.txt"
+        outside.write_text("nope\n", encoding="utf-8")
+        (self.cwd / ".env").write_text("TOKEN=1\n", encoding="utf-8")
+        link = self.cwd / "escape"
+        link.symlink_to(outside)
+
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.25"
+        result = bridge.handle_event(self.event(tool_name="Read", tool_input={"file_path": "note.txt"}), self.environ)
+        self.assertIn('"deny"', result.stdout)
+        self.assertEqual(self.approvals()[-1]["via"], "timeout")
+        self.assertFalse(any((self.legacy / "pending").glob("*.json")))
+
+        self.environ["CC_BRIDGE_AUTO_ALLOW_CWD_READ"] = "1"
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "5"
+        started = time.monotonic()
+        result = bridge.handle_event(self.event(tool_name="Read", tool_input={"file_path": str(inside)}), self.environ)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertIn('"permissionDecision": "allow"', result.stdout)
+        self.assertEqual(self.approvals()[-1]["via"], "cwd_read")
+        self.assertEqual(self.approvals()[-1]["tool"], "Read")
+        self.assertFalse((self.ahp / "pending").exists() and any((self.ahp / "pending").glob("*.json")))
+        self.assertFalse(any((self.legacy / "pending").glob("*.json")))
+
+        result = bridge.handle_event(
+            self.event(tool_name="Read", tool_input={"file_path": str(self.cwd / ".env")}), self.environ)
+        self.assertIn('"permissionDecision": "deny"', result.stdout)
+        self.assertEqual(self.approvals()[-1]["via"], "rule")
+        self.assertEqual(self.approvals()[-1]["rule_id"], "secret-env-file")
+
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.25"
+        for target in (str(outside), str(link), str(self.cwd / ".." / "outside.txt")):
+            result = bridge.handle_event(self.event(tool_name="Read", tool_input={"file_path": target}), self.environ)
+            self.assertIn('"deny"', result.stdout, target)
+            self.assertEqual(self.approvals()[-1]["via"], "timeout", target)
+        result = bridge.handle_event(self.event(tool_name="Bash", tool_input={"command": "echo hi"}), self.environ)
+        self.assertIn('"deny"', result.stdout)
+        self.assertEqual(self.approvals()[-1]["via"], "timeout")
+
+        cfg = bridge.default_config()
+        cfg["auto_allow"] = {"cwd_read": True}
+        self.environ["CC_BRIDGE_AUTO_ALLOW_CWD_READ"] = "0"
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.25"
+        result = bridge.handle_event(
+            self.event(tool_name="Read", tool_input={"file_path": "note.txt"}), self.environ, cfg=cfg)
+        self.assertEqual(self.approvals()[-1]["via"], "timeout")
 
 
 class LaunchHelperTest(unittest.TestCase):

@@ -40,6 +40,9 @@
   "stop": {
     "max_blocks": 3
   },
+  "auto_allow": {
+    "cwd_read": false
+  },
   "events": {
     "SessionStart": "push",
     "Setup": "log",

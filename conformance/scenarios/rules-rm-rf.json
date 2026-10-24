@@ -62,7 +62,7 @@
       "effect": "allow",
       "via": "reply",
       "ack": "consumed",
-      "pending": true
+      "pending": false
     },
     {
       "step": 2,

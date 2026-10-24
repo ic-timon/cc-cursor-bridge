@@ -145,7 +145,7 @@ python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py push "$CC_TASK_ID" --sinc
 python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
 ```
 
-`pending` 只列出还没有回复的等待项。`push` 列出还没消费的通知并前进游标；`--since <seq>` 从该序号之后再列一次。`pending` 和 `push` 每行第一列就是完整路径，没有前缀；有摘要时在同一行路径后接一个 TAB 和 `# ...`，没有摘要时与以前逐字节一致。`watch` 每出现一条就打一行：`pending <路径>` 或 `push <路径>`，摘要同样用 TAB 接在路径后。摘要格式：Stop/SubagentStop `# reply: <回答第一行>`，PostToolUse `# response: <输出第一行>`，PostToolUseFailure `# error: <错误第一行>`，助手文本打开时 `# assistant: <文本第一行>`。加 `--once` 只打当前这一批。
+`pending` 只列出还没有回复的等待项。回复已经生效，或者超时已经作出决定之后，对应的 `pending/<id>.json`（以及截断时的 `.full.json`）会删掉；文件本来就不在就忽略。`replies/` 和 `events.jsonl` 留下来。同一次决定再追加一行到任务目录的 `approvals.jsonl`（旧目录和 AHP 目录各一份）：`ts`、`seq` 或 `pending_id`、`event`、`tool`（有工具名时）、`decision`、`via`（`rule`、`reply`、`timeout`，以及 `invalid_reply` / `error` / `cwd_read`）、`reason`。`via` 是 `rule` 时还有 `rule_id`。`reason` 和 `tool` 的脱敏方式与 `events.jsonl` 相同。规则直接拒绝、人的回复、超时默认都会写一行。`push` 列出还没消费的通知并前进游标；`--since <seq>` 从该序号之后再列一次。`pending` 和 `push` 每行第一列就是完整路径，没有前缀；有摘要时在同一行路径后接一个 TAB 和 `# ...`，没有摘要时与以前逐字节一致。`watch` 每出现一条就打一行：`pending <路径>` 或 `push <路径>`，摘要同样用 TAB 接在路径后。摘要格式：Stop/SubagentStop `# reply: <回答第一行>`，PostToolUse `# response: <输出第一行>`，PostToolUseFailure `# error: <错误第一行>`，助手文本打开时 `# assistant: <文本第一行>`。加 `--once` 只打当前这一批。
 
 命令、文件内容、Stop/SubagentStop 的回答、PostToolUse 的 `tool_response` 或 PostToolUseFailure 的 `error` 超过上限时，短文件里该字段是一个带 `text`、`truncated: true`、`original_length` 和 `sha256` 的对象。完整且已脱敏的正文在同目录的 `<seq>-<事件>.full.json`。先读这份完整文件，再决定 allow 或验收。主通知里的 `summary` 仍按 `log.max_field_chars`（默认 240）保持简短。
 
@@ -225,6 +225,8 @@ tail -f ~/cc-$CC_TASK_ID.jsonl
 
 `assistant_text.enabled` 默认 `false`；打开后 MessageDisplay 从 log 变成 push，详见上面的「助手文本」。
 
+`auto_allow.cwd_read` 默认 `false`（不写这份配置也一样）。设成 `true`，或单次 `CC_BRIDGE_AUTO_ALLOW_CWD_READ=1`，PreToolUse 的 `Read` 在目标路径解析之后仍落在 Claude 会话 cwd 里面、并且没有命中 `rules.json` 时，立刻 allow，不写 pending。cwd 外面的路径、通过符号链接跳到 cwd 外面的路径、以及 Read 以外的工具，仍要等待或走规则。`.env`、`~/.ssh`、`.claude-flow/`、`.swarm/` 先被规则拒绝，自动放行不会盖过它们。`CC_BRIDGE_AUTO_ALLOW_CWD_READ=0` 可以在配置打开时把这一次关掉。
+
 WAIT 的 hook timeout 是 180 秒。等待本身默认 120 秒（`wait_all.timeout_seconds`，或 `CC_BRIDGE_WAIT_ALL_TIMEOUT`）。SessionEnd 的 timeout 是 55 秒。`stop.max_blocks` 默认 3。
 
 失败时：PreToolUse、PermissionRequest 拒绝；Elicitation 以 decline 回答；Stop 放行结束。`stop_hook_active` 为 true 且回复里没有明确的 `decision: block` 时，也放行结束。
@@ -297,6 +299,7 @@ Claude Code 的 hook 不给推理（thinking）内容，所以 capabilities 里 
 ## 容易踩的坑
 
 - `--allowedTools` 会吃掉它后面的参数，直到下一个选项。prompt 写在它后面时到不了 `-p`，stderr 是 `Input must be provided either through stdin or as a prompt argument`（kio 的 TLS agent 第一次启动）。启动一律用 stdin：`scripts/run_claude_bridged.sh --prompt-file …`，或 `claude -p … < prompt.txt`。详见「启动（prompt 走 stdin）」。
+- `pending/` 里已经回复或已经超时的文件会被删掉，避免 `ls pending` 把旧请求当成还在等。审计看 `replies/`、`events.jsonl` 和 `approvals.jsonl`。
 - 仓库路径里的 Write 会被 Claude Code 的 safetyCheck 当成敏感文件。PreToolUse allow 挡不住，要在 PermissionRequest 上 allow。仓库外的同一条 Write 通常不用这一步。
 - 这 5 个事件在 `-p` 里没有触发出来：PermissionDenied、StopFailure、TeammateIdle、CwdChanged、DirectoryAdded。auto 模式没有稳定地拒绝命令；把 API 指到没人听的端口仍被本机代理接走；没有可用的 agent teams 开关；Bash `cd` 不改变会话目录；`/add-dir` 在这个环境里不可用。
 - Stop 最多 block 3 次（`stop.max_blocks` / `CC_BRIDGE_STOP_MAX_BLOCKS`，默认 3）。第 4 次即使再 block 也会结束。缺的是这次会话修不了的外部依赖时，应 `ack` 并把缺口写进 PR/报告；不要靠抬高 `CC_BRIDGE_STOP_MAX_BLOCKS` 空转。

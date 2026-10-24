@@ -254,7 +254,7 @@ python3 scripts/test_bridge.py
 /usr/bin/python3 scripts/test_bridge.py
 ```
 
-两条都应通过（当前 65 个测试，含 `run_claude_bridged.sh --dry-run`）。AHP v1 一致性：
+两条都应通过（当前 68 个测试，含 `run_claude_bridged.sh --dry-run`）。AHP v1 一致性：
 
 ```bash
 python3 -m conformance --producer cc-adapter
