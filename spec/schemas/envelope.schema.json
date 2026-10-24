@@ -125,6 +125,7 @@
             "rule",
             "error",
             "invalid_reply",
+            "cwd_read",
             "none"
           ]
         },

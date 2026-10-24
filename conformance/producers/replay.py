@@ -414,6 +414,12 @@ class Producer:
         if "stray_tmp" in MUTATE:
             (self.dir / "pending" / f"{seq}-{event}.json.tmp").write_text("{}")
         self.record(env, outcome)
+        for suffix in (".json", ".full.json"):
+            notice = self.dir / "pending" / f"{seq}-{event}{suffix}"
+            try:
+                notice.unlink()
+            except OSError:
+                pass
         injected = bool(reply and ack.get("via") == "reply" and reply.get("additional_context"))
         return applied, injected
 

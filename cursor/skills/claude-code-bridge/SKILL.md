@@ -137,7 +137,7 @@ python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py push "$CC_TASK_ID"
 python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
 ```
 
-`pending` 只列出还没有 `replies/<seq>.json` 的等待项。`push` 列出尚未消费的推送并前进游标；`--since <seq>` 从该序号之后再列一次。`pending` 和 `push` 每行第一列是完整路径，没有 kind 前缀；有预览时在路径后接一个 TAB 和 `# reply: ...` / `# assistant: ...`，没有预览时只有路径，和以前一致。`watch` 把新出现的 pending 和 push 各打一行（`pending <路径>` 或 `push <路径>`），预览同样用 TAB 接在路径后，适合盯着看。预览格式：`# reply: <回答第一行>`（Stop/SubagentStop）、`# response: ...`（PostToolUse）、`# error: ...`（PostToolUseFailure）、`# assistant: ...`（助手文本打开时）。加 `--once` 只打当前这一批。
+`pending` 只列出还没有 `replies/<seq>.json` 的等待项。回复生效或超时作出决定后，`pending/<id>.json` 会删掉；`replies/`、`events.jsonl` 和 `approvals.jsonl` 留下。`approvals.jsonl` 每一行是一次门控决定（规则拒绝、回复、超时），字段有 `ts`、`seq`、`event`、`tool`、`decision`、`via`、`reason`，规则拒绝还有 `rule_id`。`push` 列出尚未消费的推送并前进游标；`--since <seq>` 从该序号之后再列一次。`pending` 和 `push` 每行第一列是完整路径，没有 kind 前缀；有预览时在路径后接一个 TAB 和 `# reply: ...` / `# assistant: ...`，没有预览时只有路径，和以前一致。`watch` 把新出现的 pending 和 push 各打一行（`pending <路径>` 或 `push <路径>`），预览同样用 TAB 接在路径后，适合盯着看。预览格式：`# reply: <回答第一行>`（Stop/SubagentStop）、`# response: ...`（PostToolUse）、`# error: ...`（PostToolUseFailure）、`# assistant: ...`（助手文本打开时）。加 `--once` 只打当前这一批。
 
 回复是一个 JSON 对象：
 
@@ -150,6 +150,8 @@ python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
 命令和文件内容超过上限时（默认命令 4000 字、文件内容 2000 字），短文件里该字段是一个带 `text`、`truncated: true`、`original_length` 和 `sha256` 的对象，完整且已脱敏的正文在同目录的 `<seq>-<事件>.full.json`。Stop/SubagentStop 的 `last_assistant_message`、PostToolUse 的 `tool_response`、PostToolUseFailure 的 `error`、开关打开时的 `assistant_text` 也走同一套；其中工具返回和错误在主通知里按 `log.max_field_chars`（默认 240）截断。命令或回答被截断时，先读这份 `.full.json` 再决定 allow 或验收。
 
 PreToolUse 回 `allow` 会让这次工具调用跳过权限提示。只在你看过完整命令和路径之后才 allow。
+
+`auto_allow.cwd_read` 默认关。只有 `CC_BRIDGE_AUTO_ALLOW_CWD_READ=1`（或配置里打开）时，落在会话 cwd 内的 `Read` 才不写 pending、直接 allow。`.env`、`~/.ssh`、`.claude-flow/` 仍然先被规则拒绝。cwd 外和指到 cwd 外的符号链接仍然要等你回复。不要假设 Read 会自己放行。
 
 旧的窄等待仍然可用，但只在该事件的模式是 `log` 时生效：`CC_BRIDGE_WAIT=1` 等 PermissionRequest，`CC_BRIDGE_WAIT_PRE_TOOL=1` 再加 PreToolUse。旧目录里文件名是 `pending/<id>.json`，不是 seq；AHP 目录里它是普通 gate（`pending/<seq>-<事件>.json`，可用 `--ahp` 回复）。回复不合法时立即 deny。
 

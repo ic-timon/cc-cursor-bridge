@@ -156,6 +156,15 @@ def g_no_tmp(v: TaskView, val: Validators, ctx: dict) -> Result:
 def g_one_ack_per_gate(v: TaskView, val: Validators, ctx: dict) -> Result:
     gates = set(v.notices["pending"])
     acks = set(v.acks)
+    # A finished gate deletes pending/. The events record is what proves it ran.
+    for seq, rec in v.by_seq.items():
+        if rec.get("class") != "gate":
+            continue
+        via = (rec.get("outcome") or {}).get("via")
+        if via in ("reply", "timeout", "invalid_reply", "error"):
+            gates.add(seq)
+        elif via == "rule" and seq in acks:
+            gates.add(seq)
     errs = [r.get("seq") for r in v.records() if r.get("class") == "gate"
             and (r.get("outcome") or {}).get("via") == "error"]
     want = gates | {s for s in errs if isinstance(s, int)}
@@ -315,7 +324,10 @@ def g_rule_deny(v: TaskView, val: Validators, ctx: dict) -> Result:
         if seq in v.notices["pending"] and seq not in v.acks:
             bad.append(f"seq {seq}: rule-denied tool.pre has a pending file")
         if seq not in v.notices["pending"] and seq in v.acks:
-            bad.append(f"seq {seq}: ack written for a rule deny without pending")
+            ack = v.acks.get(seq) or {}
+            # updated_input re-checks rules after a real gate; that ack stays, the pending file does not.
+            if not isinstance(ack, dict) or ack.get("status") not in ("consumed", "expired", "invalid"):
+                bad.append(f"seq {seq}: ack written for a rule deny without pending")
         if feature and seq not in notices:
             bad.append(f"seq {seq}: no policy.deny notify (spec 11)")
     return _fail(bad)
@@ -499,10 +511,14 @@ def expectation_checks(v: TaskView, scenario: dict, effects: Dict[int, dict]) ->
                             else ("fail", f"class {rec.get('class')!r}, want {exp['class']!r}")))
         if "truncated" in exp:
             notice = v.notices["pending"].get(seq) or v.notices["push"].get(seq)
-            doc = notice[1] if notice else {}
-            missing = [f for f in exp["truncated"] if not is_truncation(get_path((doc or {}).get("payload"), f.split(".")))]
+            if notice:
+                source_payload = (notice[1] or {}).get("payload") if isinstance(notice[1], dict) else {}
+            else:
+                # Finished gates delete pending/. The audit line still carries truncation objects.
+                source_payload = rec.get("payload") or {}
+            missing = [f for f in exp["truncated"] if not is_truncation(get_path(source_payload, f.split(".")))]
             results.append(("E07", f"{label} truncated fields", _fail([f"{f} not a truncation object" for f in missing])
-                            if notice else ("fail", "no pending/push notice")))
+                            if notice or rec.get("class") == "gate" else ("fail", "no pending/push notice")))
         if "payload_has" in exp:
             notice = v.notices["pending"].get(seq) or v.notices["push"].get(seq)
             payload = (notice[1] or {}).get("payload") if notice else rec.get("payload")

@@ -205,6 +205,7 @@ def default_config() -> dict:
             "content_chars": 2000,
         },
         "stop": {"max_blocks": 3},
+        "auto_allow": {"cwd_read": False},
         "events": dict(DEFAULT_EVENT_MODES),
     }
 
@@ -247,7 +248,7 @@ def load_config(root: Path, environ: dict) -> Tuple[dict, str]:
         return cfg, f"配置文件无法解析，已回退到内置配置: {exc}"
     if not isinstance(data, dict):
         return cfg, "配置文件不是对象，已回退到内置配置"
-    for key in ("notifier", "wait", "wait_all", "log", "assistant_text", "pending", "stop", "events", "ahp"):
+    for key in ("notifier", "wait", "wait_all", "log", "assistant_text", "pending", "stop", "events", "ahp", "auto_allow"):
         if isinstance(data.get(key), dict):
             cfg.setdefault(key, {}).update(data[key])
     return cfg, ""
@@ -263,6 +264,35 @@ def env_flag(environ: dict, name: str, default: bool) -> bool:
 def assistant_text_enabled(cfg: dict, environ: dict) -> bool:
     block = cfg.get("assistant_text") or {}
     return env_flag(environ, "CC_BRIDGE_ASSISTANT_TEXT", bool(block.get("enabled")))
+
+
+def cwd_read_enabled(cfg: dict, environ: dict) -> bool:
+    """Optional Read auto-allow. Default off so a missing config still waits."""
+    block = cfg.get("auto_allow") or {}
+    return env_flag(environ, "CC_BRIDGE_AUTO_ALLOW_CWD_READ", bool(block.get("cwd_read")))
+
+
+def read_path_inside_cwd(tool_input: dict, cwd: Path, home: Path) -> bool:
+    """True when the Read target resolves inside the session cwd.
+
+    A symlink whose target leaves cwd is not inside. A missing path, or one
+    that cannot be resolved, is not inside (fail closed).
+    """
+    raw = ""
+    for key in ("file_path", "path"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value.strip():
+            raw = value.strip()
+            break
+    if not raw:
+        return False
+    try:
+        root = cwd.resolve()
+        target = resolve_path(raw, cwd, home)
+        target.relative_to(root)
+    except (OSError, ValueError, RuntimeError):
+        return False
+    return True
 
 
 def safe_component(value: str) -> str:
@@ -640,6 +670,79 @@ def append_record(path: Path, record: dict, before_write: Optional[Callable[[dic
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+GATE_AUDIT_VIAS = {"rule", "reply", "timeout", "invalid_reply", "error", "cwd_read"}
+
+
+def append_jsonl(path: Path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            handle.seek(0, os.SEEK_END)
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def approval_line(
+    event_name: str,
+    seq: int,
+    pending_id: str,
+    tool_name: str,
+    outcome: dict,
+    secrets: List[str],
+    limit: int,
+) -> Optional[dict]:
+    """One approvals.jsonl object, or None when this event made no gate decision."""
+    via = str((outcome or {}).get("via") or "")
+    if via not in GATE_AUDIT_VIAS:
+        return None
+    line: Dict[str, Any] = {
+        "ts": local_iso(),
+        "event": event_name,
+        "decision": str(outcome.get("decision") or ""),
+        "via": via,
+    }
+    if seq:
+        line["seq"] = seq
+    if pending_id:
+        line["pending_id"] = pending_id
+    if tool_name:
+        line["tool"] = truncate(tool_name, limit, secrets)
+    reason = outcome.get("reason")
+    if reason:
+        line["reason"] = truncate(str(reason), limit, secrets)
+    if via == "rule" and outcome.get("rule_id"):
+        line["rule_id"] = str(outcome["rule_id"])
+    return line
+
+
+def write_approvals(
+    folders: List[Path],
+    event_name: str,
+    seq: int,
+    pending_id: str,
+    tool_name: str,
+    outcome: dict,
+    secrets: List[str],
+    limit: int,
+) -> str:
+    line = approval_line(event_name, seq, pending_id, tool_name, outcome, secrets, limit)
+    if line is None:
+        return ""
+    errors = []
+    for folder in folders:
+        try:
+            append_jsonl(folder / "approvals.jsonl", line)
+        except OSError as exc:
+            errors.append(str(exc))
+    if errors:
+        return "cc-cursor-bridge: 写 approvals.jsonl 失败: " + "; ".join(errors) + "\n"
+    return ""
+
+
 def should_push(cfg: dict, record: dict) -> bool:
     notifier = cfg.get("notifier") or {}
     events = notifier.get("events") or []
@@ -723,6 +826,18 @@ def should_wait(event_name: str, wait: dict, already_denied: bool) -> bool:
     return False
 
 
+def discard_pending(path: Path) -> None:
+    """Remove a finished gate notice. Missing files are ignored."""
+    targets = [path]
+    if path.name.endswith(".json") and not path.name.endswith(".full.json"):
+        targets.append(path.with_suffix(".full.json"))
+    for target in targets:
+        try:
+            target.unlink()
+        except OSError:
+            pass
+
+
 def wait_for_reply(task_dir: Path, request_id: str, pending_body: dict, wait: dict) -> Tuple[str, str, str]:
     pending_path = task_dir / "pending" / f"{request_id}.json"
     reply_path = task_dir / "replies" / f"{request_id}.json"
@@ -734,17 +849,20 @@ def wait_for_reply(task_dir: Path, request_id: str, pending_body: dict, wait: di
     if default not in ("allow", "deny"):
         default = "deny"
     deadline = time.monotonic() + timeout
-    while True:
-        if reply_path.is_file():
-            try:
-                data = json.loads(reply_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                data = None
-            if isinstance(data, dict) and data.get("decision") in ("allow", "deny"):
-                return str(data["decision"]), str(data.get("reason") or ""), "reply"
-        if time.monotonic() >= deadline:
-            return str(default), "等待回复超时", "timeout"
-        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+    try:
+        while True:
+            if reply_path.is_file():
+                try:
+                    data = json.loads(reply_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    data = None
+                if isinstance(data, dict) and data.get("decision") in ("allow", "deny"):
+                    return str(data["decision"]), str(data.get("reason") or ""), "reply"
+            if time.monotonic() >= deadline:
+                return str(default), "等待回复超时", "timeout"
+            time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+    finally:
+        discard_pending(pending_path)
 
 
 def wait_all_settings(cfg: dict, environ: dict) -> dict:
@@ -1792,6 +1910,14 @@ def handle_event(
     summary["channel"] = legacy_channel
     blocked_by_probe = probe_stdout is not None and event_name not in ("WorktreeCreate", "WorktreeRemove")
     ahp_after: List[Tuple[str, dict]] = []
+    auto_read = (
+        not rule_id
+        and decision != "probe"
+        and event_name == "PreToolUse"
+        and tool_name == "Read"
+        and cwd_read_enabled(cfg, environ)
+        and read_path_inside_cwd(tool_input, cwd, home)
+    )
     if rule_id:
         ahp_outcome = {"decision": "deny", "via": "rule", "rule_id": rule_id, "reason": reason}
         ahp_after.append(("policy.deny", {
@@ -1803,6 +1929,13 @@ def handle_event(
                                                  "applied_decision": "deny"}))
     elif blocked_by_probe:
         ahp_outcome = {"via": "none", "reason": "CC_BRIDGE_PROBE"}
+    elif auto_read and mode == "wait":
+        # Rules already ran. A Read that stays inside the session cwd does not wait.
+        decision = "allow"
+        reason = "会话目录内的 Read，自动放行"
+        stdout = decision_stdout(event_name, decision, reason)
+        summary["delivery"] = "cwd_read"
+        ahp_outcome = {"decision": "allow", "via": "cwd_read", "reason": reason}
     elif mode in ("wait", "push"):
         body, full_body, was_truncated = notice_body(
             seq,
@@ -1846,7 +1979,14 @@ def handle_event(
     if rule_id and "delivery" not in summary:
         summary["delivery"] = "rule"
 
-    if (
+    if auto_read and mode == "log" and narrow_hook and not rule_id:
+        decision = "allow"
+        reason = "会话目录内的 Read，自动放行"
+        stdout = decision_stdout(event_name, decision, reason)
+        summary["wait"] = "cwd_read"
+        summary["delivery"] = "cwd_read"
+        ahp_outcome = {"decision": "allow", "via": "cwd_read", "reason": reason}
+    elif (
         probe_stdout is None
         and mode == "log"
         and not rule_id
@@ -1873,6 +2013,15 @@ def handle_event(
         summary["delivery"] = mode
     if event_name == "SessionStart":
         stdout = inject_watch_paths(stdout, watch)
+
+    audit_dirs: List[Path] = []
+    if legacy:
+        audit_dirs.append(directory)
+    if task is not None:
+        audit_dirs.append(task.dir)
+    stderr += write_approvals(
+        audit_dirs, event_name, seq, pending_id, tool_name, ahp_outcome, secrets, limit
+    )
 
     if task is not None and ahp_env is not None:
         if ahp_outcome.get("reason"):
@@ -1966,19 +2115,23 @@ def run_gate(
     body["timeout_ms"] = timeout_ms
     body["default_decision"] = default
     paths: List[Path] = []
+    notices: List[Path] = []
     if task is not None and ahp_env is not None:
         ahp_env.update({"reply_file": f"replies/{seq}.json", "deadline": deadline, "timeout_ms": timeout_ms,
                         "decisions": decisions, "default_decision": default})
         ahp_cc.ensure_dir(task.dir / "replies")
         task.write_notice("pending", ahp_env)
         paths.append(task.dir / "replies" / f"{seq}.json")
+        notices.append(task.dir / "pending" / f"{seq}-{ahp_env['event']}.json")
     if legacy and narrow:
-        write_atomic(directory / "pending" / f"{narrow['id']}.json",
-                     json.dumps(narrow["body"], ensure_ascii=False, indent=2) + "\n")
+        narrow_path = directory / "pending" / f"{narrow['id']}.json"
+        write_atomic(narrow_path, json.dumps(narrow["body"], ensure_ascii=False, indent=2) + "\n")
+        notices.append(narrow_path)
         paths.append(directory / "replies" / f"{narrow['id']}.json")
     elif legacy:
         full_body.update({k: body[k] for k in ("reply_file", "deadline", "timeout_ms", "default_decision")})
         write_notice(directory, "pending", seq, event_name, body, full_body, was_truncated)
+        notices.append(directory / "pending" / f"{seq}-{event_name}.json")
         paths.append(directory / "replies" / f"{seq}.json")
 
     data, error, sha, found = poll_replies(paths, timeout_ms / 1000.0, interval)
@@ -2080,6 +2233,9 @@ def run_gate(
         outcome["reason"] = why
     if rule_hit:
         outcome["rule_id"] = rule_hit
+    # Reply, timeout, and invalid reply all finish the gate. replies/ and events stay.
+    for notice in notices:
+        discard_pending(notice)
     return {"stdout": answered, "label": label, "reason": why, "outcome": outcome, "after": after,
             "delivery": delivery, "accepted": accepted, "rule_id": rule_hit, "stderr": ""}
 
@@ -2199,6 +2355,13 @@ def _record_failure(environ: dict, event: dict, hook: str, name: str, default: s
         task.record(env, {"decision": default, "via": "error", "reason": task.shaper.redact_text(message)[:400]})
         task.notify("producer.error", {"stage": stage, "message": task.shaper.redact_text(message)[:500],
                                        "target_seq": seq, "applied_decision": default}, ctx)
+        try:
+            write_approvals(
+                [task.dir], hook, seq, "", str(event.get("tool_name") or ""),
+                {"decision": default, "via": "error", "reason": message}, secrets, 240,
+            )
+        except Exception:  # noqa: BLE001
+            pass
         if not ahp_cc.legacy_enabled(environ):
             return
         legacy_seq = seq
@@ -2220,6 +2383,13 @@ def _record_failure(environ: dict, event: dict, hook: str, name: str, default: s
         "decision_reason": truncate(message, 240, secrets),
     }
     append_record(directory / "events.jsonl", record, None)
+    try:
+        write_approvals(
+            [directory], hook, legacy_seq, "", str(event.get("tool_name") or ""),
+            {"decision": default, "via": "error", "reason": message}, secrets, 240,
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 _EMERGENCY_STDOUT = {
