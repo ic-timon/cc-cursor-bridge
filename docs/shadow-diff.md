@@ -79,4 +79,4 @@ python3 -m tools.shadow_diff.tests     # 本工具的测试（合成任务树 + 
 
 - `allow/cc-known.json`：CC 适配层自身的已知差异——10 个异步 hook 不能做 gate（`cc-async-not-gate`，只放行参照为 `["log","notify"]` 的情形）、`reasoning_delta=false`、`host_hook_timeout_ms`。
 - `allow/cc-vs-replay.json`：CC 对一致性参考 producer（测试用，也是示例）。
-- `allow/cc-vs-rino.json`：CC 对 RINO P2 第一版的计划差异（只声明 `tool.pre`、`turn.stop` 两个 gate；不声明子代理、worktree 等；`max_gate_timeout_ms`；`updated_input`、`additional_context` 先关；`turn.stop` 可接受 300 秒；规则文件 digest 不同）。是草案，RINO 声明更多能力后逐条删。不比较 `message.delta`（两边分片方式不同）。
+- `allow/cc-vs-rino.json`：CC 对 RINO 的差异清单。P6 v0（`rino-ahp-conformance`）部分：已决 gate 的 pending 通知 CC 会删除、RINO 保留，所以 `gate.pending` / `gate.decisions` / `gate.default_decision` / `gate.timeout_ms` 只在候选侧可见（spec 5.1 对这几个字段只要求 SHOULD；两边 capabilities 声明一致）；CC 默认规则多一条宿主专用的 `agent-artifact-dirs`。另保留 RINO P2 第一版的生产差异（只声明 `tool.pre`、`turn.stop` 两个 gate；不声明子代理、worktree 等；`max_gate_timeout_ms`；`updated_input`、`additional_context` 先关；`turn.stop` 可接受 300 秒；规则文件 digest 不同）——这些 P2 条目对 P6 conformance producer 不会命中，等 production RINO 追上后逐条删。不比较 `message.delta`（两边分片方式不同）。
