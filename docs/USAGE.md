@@ -133,7 +133,7 @@ claude -p --plugin-dir ~/Sync/Test/cc-cursor-bridge --allowedTools "Write,Edit" 
 
 只有在 prompt 是 `-p` 的紧邻下一个参数、且后面不再跟 consuming flag 时，才可以不用重定向：`claude -p "$(cat prompt.txt)" --plugin-dir …`。文档里的启动例子一律走 stdin。`run_claude_bridged.sh --dry-run` 只打印 argv，并注明 prompt 走 stdin，不需要本机有 `claude`。
 
-### pending、reply、push、watch
+### pending、reply、push、watch、status
 
 `claude -p` 放后台。先处理会卡住的 pending，再批量读 push。把下面的路径换成仓库检出：
 
@@ -143,11 +143,43 @@ python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" 4 '{"
 python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py push "$CC_TASK_ID"
 python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py push "$CC_TASK_ID" --since 0
 python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py status "$CC_TASK_ID"
 ```
 
 `pending` 只列出还没有回复的等待项。回复已经生效，或者超时已经作出决定之后，对应的 `pending/<id>.json`（以及截断时的 `.full.json`）会删掉；文件本来就不在就忽略。`replies/` 和 `events.jsonl` 留下来。同一次决定再追加一行到任务目录的 `approvals.jsonl`（旧目录和 AHP 目录各一份）：`ts`、`seq` 或 `pending_id`、`event`、`tool`（有工具名时）、`decision`、`via`（`rule`、`reply`、`timeout`，以及 `invalid_reply` / `error` / `cwd_read`）、`reason`。`via` 是 `rule` 时还有 `rule_id`。`reason` 和 `tool` 的脱敏方式与 `events.jsonl` 相同。规则直接拒绝、人的回复、超时默认都会写一行。`push` 列出还没消费的通知并前进游标；`--since <seq>` 从该序号之后再列一次。`pending` 和 `push` 每行第一列就是完整路径，没有前缀；有摘要时在同一行路径后接一个 TAB 和 `# ...`，没有摘要时与以前逐字节一致。`watch` 每出现一条就打一行：`pending <路径>` 或 `push <路径>`，摘要同样用 TAB 接在路径后。摘要格式：Stop/SubagentStop `# reply: <回答第一行>`，PostToolUse `# response: <输出第一行>`，PostToolUseFailure `# error: <错误第一行>`，助手文本打开时 `# assistant: <文本第一行>`。加 `--once` 只打当前这一批。
 
 命令、文件内容、Stop/SubagentStop 的回答、PostToolUse 的 `tool_response` 或 PostToolUseFailure 的 `error` 超过上限时，短文件里该字段是一个带 `text`、`truncated: true`、`original_length` 和 `sha256` 的对象。完整且已脱敏的正文在同目录的 `<seq>-<事件>.full.json`。先读这份完整文件，再决定 allow 或验收。主通知里的 `summary` 仍按 `log.max_field_chars`（默认 240）保持简短。
+
+### 任务结束态：status.json
+
+`SessionEnd` 一到，任务目录里就落一份耐久的终端态文件（旧目录和 AHP 目录各一份，`write_atomic` 原子写入，读取方不会看到半截）：
+
+```bash
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py status "$CC_TASK_ID"      # 旧目录
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py status "$CC_TASK_ID" --ahp
+```
+
+打印内容就是文件本身；没有这个文件时只打一行 `missing: <路径>`（退出码仍是 0）。也可以直接读 `$CC_BRIDGE_DIR/tasks/<task>/status.json`，AHP 目录里同名。
+
+| 字段 | 含义 |
+| --- | --- |
+| `state` | 固定 `ended`。`SessionEnd` 只说明进程结束，不说明验收通过，所以不从它推 `done` / `failed` |
+| `ended_at` | 写文件时的本地时间（带时区） |
+| `session_id` | Claude Code 的会话 id |
+| `session_end_reason` | CC 给的 `reason` 原样记录（常见 `other`、`clear`、`logout`、`prompt_input_exit`；`max_turns` 这类没有 Stop 的结束也照记） |
+| `stop_accepted` | 最后一次 Stop 的验收结论：`true`（已 ack）、`false`（超时、无效回复、阻断到上限、内部错误）；没有 Stop 走过（`max_turns`、API 失败、Stop 是 log 档）时为 `null` |
+| `stop_seq` | 上面那次 Stop 的 seq，没有就是 `null` |
+| `native_event` / `ahp_event` | `SessionEnd` / `session.end`，AHP 关闭时 `ahp_event` 为 `null` |
+| `task_id` | 任务目录名 |
+
+`SessionEnd` 被设成 `off` 时和别的 log 事件一样不写日志，也不会写 `status.json`。某一份写失败只会给 stderr 加一行，另一份照写，SessionEnd 的退出码不受影响（hook 不挡进程）。
+
+**复活 / 续写硬规则**：父会话压缩后继续、或监督进程重启后接手某个 `CC_TASK_ID` 时，第一件事是 `bridge.py status <task>`（或直接读该文件）。拿到 `state: ended` 就是终端证据：
+
+- 对用户的第一句话必须是终端结果。先报 `stop_accepted` 的含义（`true` 已验收、`false` 未验收、`null` 没有 Stop 走过）、`session_end_reason`、`ended_at`，再补文件 / 测试 / cost。
+- **禁止**先发「正在修…」「还在跑」「稍等，我继续」这类过期状态。进程已经退出，`pending` 里没有东西等你回复。
+- 想看细节再读 `events.jsonl`、`approvals.jsonl`、`acks/`；要重跑就换一个新的 `CC_TASK_ID`，不要往旧任务目录里续。
+- 文件不存在（`missing:`）才说明还没有终端证据：接着看进程是否还活着，再按 pending / push 的常规循环处理。
 
 ### 四个 WAIT 事件的回复
 
@@ -215,7 +247,15 @@ python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
 tail -f ~/cc-$CC_TASK_ID.jsonl
 ```
 
-结束看进程退出码，以及流里 `"type":"result"` 那一行。Stop 被 ack 之后进程才会真正停。
+结束以后先读终端态，再读进程：
+
+```bash
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py status "$CC_TASK_ID"
+```
+
+`status.json` 里的 `state: ended` 就是「进程已经退出」的耐久证据，`stop_accepted` 说明验收结论。父会话压缩或监督进程重启后接手同一个 `CC_TASK_ID` 时，先读它再开口：已经 `ended` 就按已结束汇报，不要先发「正在修…」。详见上面的「任务结束态：status.json」。
+
+进程本身的最终结论仍以退出码和流里 `"type":"result"` 那一行为准。Stop 被 ack 之后进程才会真正停。
 
 ## 配置
 
@@ -252,7 +292,7 @@ WAIT 的 hook timeout 是 180 秒。等待本身默认 120 秒（`wait_all.timeo
 0.2.0 起 bridge 是 AHP v1（`ahp/1`，见 `spec/ahp-v1.md`）的 producer。默认**双写**：
 
 - 旧目录 `$CC_BRIDGE_DIR/tasks/<task>/` 不变：文件名 `<seq>-<Hook>.json`、`events.jsonl` 的字段、`pending`/`push`/`watch` 的输出（路径在第一列，TAB 后接 `# ...`）都和以前一样。现有 bot 不用改。
-- 新目录 `$CC_BRIDGE_DIR/ahp/tasks/<task>/`（`CC_BRIDGE_AHP_DIR` 可改）：`capabilities.json`、`consumer.json`（consumer 写）、`pending/<seq>-<事件>.json`、`push/` 和 `push/stream.jsonl`、`replies/<seq>.json`、`acks/<seq>.json`、`events.jsonl`、`state/`。
+- 新目录 `$CC_BRIDGE_DIR/ahp/tasks/<task>/`（`CC_BRIDGE_AHP_DIR` 可改）：`capabilities.json`、`consumer.json`（consumer 写）、`pending/<seq>-<事件>.json`、`push/` 和 `push/stream.jsonl`、`replies/<seq>.json`、`acks/<seq>.json`、`events.jsonl`、`state/`、`status.json`。
 
 两边共用一个 seq。只在 AHP 里有的事件（`policy.deny`、`producer.error`、`plan.update`）也占 seq，所以旧目录里的 seq 会有空号。
 

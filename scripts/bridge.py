@@ -1597,6 +1597,71 @@ def task_id_for(event: dict, environ: dict) -> str:
     return task_dir_for(event, environ).name
 
 
+STATUS_FILE = "status.json"
+
+
+def last_stop_state(task: Any, directory: Path) -> Optional[dict]:
+    """Newest Stop verdict: the AHP state file first, then the legacy copy (same key)."""
+    if task is not None:
+        last = task.last_turn_stop()
+        if isinstance(last, dict):
+            return last
+    try:
+        data = json.loads((directory / "state" / "last-turn-stop.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def session_status_record(event: dict, task: Any, directory: Path, secrets: List[str]) -> dict:
+    """Durable terminal state written on SessionEnd.
+
+    `state` is `ended`, never done/failed: SessionEnd says the process finished, not that
+    the work passed review. `stop_accepted` is the last Stop verdict, or null when no Stop
+    gate ran (max_turns, API error, Stop in log mode).
+    """
+    last = last_stop_state(task, directory)
+    accepted = last.get("accepted") if last is not None else None
+    seq = last.get("seq") if last is not None else None
+    return {
+        "state": "ended",
+        "ended_at": local_iso(),
+        "session_id": redact(str(event.get("session_id") or ""), secrets),
+        "session_end_reason": redact(str(event.get("reason") or ""), secrets),
+        "stop_accepted": accepted if isinstance(accepted, bool) else None,
+        "stop_seq": seq if isinstance(seq, int) and not isinstance(seq, bool) else None,
+        "native_event": "SessionEnd",
+        "ahp_event": "session.end" if task is not None else None,
+        "task_id": task.task_id if task is not None else directory.name,
+    }
+
+
+def write_session_status(event: dict, task: Any, directory: Path, legacy: bool,
+                         secrets: List[str]) -> Tuple[List[Path], List[str]]:
+    """Write status.json atomically next to each task tree this run keeps.
+
+    One tree failing must not cost the other its terminal state, so each write stands alone.
+    """
+    record = session_status_record(event, task, directory, secrets)
+    targets: List[Path] = []
+    if legacy:
+        targets.append(directory / STATUS_FILE)
+    if task is not None:
+        targets.append(task.dir / STATUS_FILE)
+    written: List[Path] = []
+    errors: List[str] = []
+    for path in targets:
+        try:
+            if task is not None and path == task.dir / STATUS_FILE:
+                ahp_cc.write_atomic(path, record)
+            else:
+                write_atomic(path, json.dumps(record, ensure_ascii=False, indent=2) + "\n")
+            written.append(path)
+        except OSError as exc:
+            errors.append(f"{path}: {exc}")
+    return written, errors
+
+
 def evaluate_rules(rules: List[dict], ctx: dict) -> Tuple[Optional[dict], str]:
     """First matching rule. A rule whose regex is broken denies the tools it covers (spec 11)."""
     for rule in rules:
@@ -2036,6 +2101,13 @@ def handle_event(
                 plan["tool_use_id"] = event["tool_use_id"]
             task.notify("plan.update", plan, ahp_ctx)
 
+    if event_name == "SessionEnd":
+        # Durable terminal state for rehydrated supervisors: a wake after compaction must not
+        # read a finished task as still running. Written after the AHP record so it mirrors it.
+        _, status_errors = write_session_status(event, task, directory, legacy, secrets)
+        for message in status_errors:
+            stderr += f"cc-cursor-bridge: 写 status.json 失败: {message}\n"
+
     if not legacy:
         return HookResult(stdout=stdout, stderr=stderr, code=code)
     record: Dict[str, Any] = {
@@ -2218,6 +2290,10 @@ def run_gate(
         task.write_ack(seq, ack)  # spec 9.4: the ack is written before the decision is carried out
         if accepted is not None:
             task.remember_turn_stop(seq, accepted)
+    if event_name == "Stop" and accepted is not None and legacy and (task is None or directory != task.dir):
+        # The legacy tree only carries this when the Stop gate ran (AHP tree off, or outside it).
+        write_atomic(directory / "state" / "last-turn-stop.json", json.dumps(
+            {"seq": seq, "accepted": accepted}, ensure_ascii=False) + "\n")
 
     if status == "consumed" and via == "reply":
         cc_reply = to_cc_reply(reply or {})
@@ -2408,7 +2484,8 @@ def bridge_root_from_env() -> Path:
 
 USAGE = (
     "usage: bridge.py pending <task> | reply <task> <seq> <json> "
-    "| push <task> [--since <seq>] | watch <task> [--once | --for <seconds>]  "
+    "| push <task> [--since <seq>] | watch <task> [--once | --for <seconds>] "
+    "| status <task>  "
     "(add --ahp for the AHP v1 tree)\n"
 )
 
@@ -2543,10 +2620,27 @@ def find_pending(root: Path, seq: str) -> Optional[dict]:
     return None
 
 
+def status_command(argv: List[str], ahp: bool = False) -> HookResult:
+    """Print the durable terminal state of one task, or a `missing:` line when it has none."""
+    if len(argv) != 1:
+        return HookResult(stderr="usage: bridge.py status <task> [--ahp]\n", code=2)
+    task = safe_component(argv[0]) or ""
+    if not task:
+        return HookResult(stderr="bad task id\n", code=2)
+    path = (ahp_task_root(task) if ahp else task_root(task)) / STATUS_FILE
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return HookResult(stdout=f"missing: {path}\n")
+    return HookResult(stdout=text if text.endswith("\n") else text + "\n")
+
+
 def cli(argv: List[str]) -> HookResult:
     if not argv or argv[0] not in CLI_COMMANDS:
         return HookResult(stderr=USAGE, code=2)
     ahp, argv = use_ahp_tree(argv)
+    if argv[0] == "status":
+        return status_command(argv[1:], ahp)
     if argv[0] == "pending":
         if len(argv) != 2:
             return HookResult(stderr="usage: bridge.py pending <task> [--ahp]\n", code=2)
@@ -2725,7 +2819,7 @@ def watch_command(argv: List[str], ahp: bool = False) -> HookResult:
     return HookResult(stdout="")
 
 
-CLI_COMMANDS = ("pending", "reply", "push", "watch")
+CLI_COMMANDS = ("pending", "reply", "push", "watch", "status")
 
 
 def main() -> HookResult:
