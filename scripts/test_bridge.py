@@ -1478,6 +1478,94 @@ class AhpProducerTest(unittest.TestCase):
         end = [r for r in self.records() if r["event"] == "session.end"][0]
         self.assertIs(end["payload"]["accepted"], False)
 
+    def stop_with(self, body, tree="legacy"):
+        """Run one Stop gate and write body into its reply file."""
+        thread = self.reply_later(body, tree=tree)
+        result = bridge.handle_event(self.event("Stop", last_assistant_message="done"), self.environ)
+        thread.join(3)
+        return result
+
+    def status(self, path):
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def test_session_end_status_json_after_accepted_stop(self):
+        result = self.stop_with({"ack": True})
+        self.assertEqual(result.stdout, "")
+        end = bridge.handle_event(self.event("SessionEnd", reason="other"), self.environ)
+        self.assertEqual(end.code, 0, end.stderr)
+        stop_seq = [r["seq"] for r in self.records() if r["event"] == "turn.stop"][-1]
+        self.assertIs(self.ack(stop_seq)["accepted"], True)
+        for path in (self.legacy / "status.json", self.ahp / "status.json"):
+            data = self.status(path)
+            self.assertEqual(data["state"], "ended")
+            self.assertEqual(data["session_id"], "sess")
+            self.assertEqual(data["session_end_reason"], "other")
+            self.assertIs(data["stop_accepted"], True)
+            self.assertEqual(data["stop_seq"], stop_seq)
+            self.assertEqual(data["native_event"], "SessionEnd")
+            self.assertEqual(data["ahp_event"], "session.end")
+            self.assertEqual(data["task_id"], "task1")
+            self.assertTrue(data["ended_at"])
+
+    def test_session_end_status_json_without_stop_is_null(self):
+        # max_turns: no Stop gate ran, so nothing was accepted. state stays `ended`.
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.2"
+        bridge.handle_event(self.event("SessionEnd", reason="max_turns"), self.environ)
+        for path in (self.legacy / "status.json", self.ahp / "status.json"):
+            data = self.status(path)
+            self.assertEqual(data["state"], "ended")
+            self.assertEqual(data["session_end_reason"], "max_turns")
+            self.assertIsNone(data["stop_accepted"])
+            self.assertIsNone(data["stop_seq"])
+
+    def test_session_end_status_json_records_unaccepted_stop(self):
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.2"
+        bridge.handle_event(self.event("Stop", last_assistant_message="x"), self.environ)  # times out: ack
+        bridge.handle_event(self.event("SessionEnd", reason="other"), self.environ)
+        for path in (self.legacy / "status.json", self.ahp / "status.json"):
+            data = self.status(path)
+            self.assertIs(data["stop_accepted"], False)
+            self.assertIsInstance(data["stop_seq"], int)
+
+    def test_session_end_status_json_legacy_only(self):
+        self.environ.update(CC_BRIDGE_AHP="0", CC_BRIDGE_WAIT_ALL_TIMEOUT="0.2")
+        bridge.handle_event(self.event("SessionEnd", reason="other"), self.environ)
+        self.assertFalse((self.bridge_dir / "ahp").exists())
+        data = self.status(self.legacy / "status.json")
+        self.assertEqual(data["state"], "ended")
+        self.assertIsNone(data["ahp_event"])
+
+    def test_session_end_status_write_failure_does_not_break_session_end(self):
+        self.legacy.mkdir(parents=True, exist_ok=True)
+        (self.legacy / "status.json").mkdir()  # rename onto a directory fails
+        end = bridge.handle_event(self.event("SessionEnd", reason="other"), self.environ)
+        self.assertEqual(end.code, 0)
+        self.assertIn("status.json", end.stderr)
+        self.assertTrue((self.ahp / "status.json").is_file())
+
+    def test_cli_status_prints_file_or_missing(self):
+        self.environ["CC_BRIDGE_WAIT_ALL_TIMEOUT"] = "0.2"
+        bridge.handle_event(self.event("SessionEnd", reason="other"), self.environ)
+        previous = os.environ.get("CC_BRIDGE_DIR")
+        os.environ["CC_BRIDGE_DIR"] = str(self.bridge_dir)
+        try:
+            printed = bridge.cli(["status", "task1"])
+            self.assertEqual(printed.code, 0)
+            self.assertEqual(json.loads(printed.stdout), self.status(self.legacy / "status.json"))
+            self.assertEqual(json.loads(bridge.cli(["status", "task1", "--ahp"]).stdout),
+                             self.status(self.ahp / "status.json"))
+            missing = bridge.cli(["status", "nope"])
+            self.assertEqual(missing.code, 0)
+            self.assertTrue(missing.stdout.startswith("missing: "))
+            self.assertIn("nope", missing.stdout)
+            self.assertEqual(bridge.cli(["status"]).code, 2)
+            self.assertEqual(bridge.cli(["status", "../x"]).code, 2)
+        finally:
+            if previous is None:
+                os.environ.pop("CC_BRIDGE_DIR", None)
+            else:
+                os.environ["CC_BRIDGE_DIR"] = previous
+
     def test_legacy_off_writes_only_ahp(self):
         self.environ.update(CC_BRIDGE_LEGACY="0", CC_BRIDGE_WAIT_ALL_TIMEOUT="0.2")
         bridge.handle_event(self.event(), self.environ)

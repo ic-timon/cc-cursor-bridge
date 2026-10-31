@@ -139,7 +139,9 @@ SessionStart 和 WorktreeCreate 在 `hooks.json` 里保持同步。SessionStart 
 
 等待失败策略：PreToolUse 和 PermissionRequest 超时 deny，Elicitation 超时 decline，Stop 超时放行结束。Stop 的回复 `{"decision":"block","reason":"..."}` 会让 Claude Code 继续；`{"ack":true}` 结束。`stop_hook_active` 为 true 且没有明确 block 时放行。每个任务最多阻断 `stop.max_blocks` 次（默认 3）。外部依赖这次解不了时 ack 并把缺口写进 PR/报告，不要抬高 `CC_BRIDGE_STOP_MAX_BLOCKS` 空转。
 
-助手命令：`python3 scripts/bridge.py pending <task>`、`reply <task> <seq> <json>`、`push <task> [--since <seq>]`、`watch <task>`。
+助手命令：`python3 scripts/bridge.py pending <task>`、`reply <task> <seq> <json>`、`push <task> [--since <seq>]`、`watch <task>`、`status <task>`。
+
+`SessionEnd` 会在任务目录写 `status.json`（`state: ended`、`ended_at`、`session_end_reason`、`stop_accepted` 等）。父会话压缩或监督重启后接手同一个 `CC_TASK_ID`，先用 `status <task>` 读它；`state: ended` 表示进程已退出，第一句话就该是终端结果，不要先报「正在修」。详见 `docs/USAGE.md` 的「任务结束态：status.json」。
 
 旧的窄等待 `CC_BRIDGE_WAIT=1` 只在事件模式为 `log` 时再生效；0.2.0 起它在 AHP 目录里也是一个 gate（pending + ack），旧目录仍写 `pending/<tool_use_id>.json`。
 
@@ -180,7 +182,7 @@ PUSH/LOG 的 hook 是 `async: true`（timeout 30，SessionEnd 55，因为官方 
 | PostModelSwitch | log | 记日志 |
 | Elicitation | wait | 等 accept 或 decline。超时 decline |
 | ElicitationResult | log | 记日志 |
-| SessionEnd | log | 异步记日志。timeout 55 秒 |
+| SessionEnd | log | 异步记日志，并写任务目录的 `status.json`（`state: ended` + 最后一次 Stop 的 `accepted`）。timeout 55 秒 |
 
 ## 本机不支持的 hook 事件
 

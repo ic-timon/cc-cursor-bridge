@@ -135,6 +135,7 @@ python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py pending "$CC_TASK_ID"
 python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '<json>'
 python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py push "$CC_TASK_ID"
 python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py watch "$CC_TASK_ID"
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py status "$CC_TASK_ID"
 ```
 
 `pending` 只列出还没有 `replies/<seq>.json` 的等待项。回复生效或超时作出决定后，`pending/<id>.json` 会删掉；`replies/`、`events.jsonl` 和 `approvals.jsonl` 留下。`approvals.jsonl` 每一行是一次门控决定（规则拒绝、回复、超时），字段有 `ts`、`seq`、`event`、`tool`、`decision`、`via`、`reason`，规则拒绝还有 `rule_id`。`push` 列出尚未消费的推送并前进游标；`--since <seq>` 从该序号之后再列一次。`pending` 和 `push` 每行第一列是完整路径，没有 kind 前缀；有预览时在路径后接一个 TAB 和 `# reply: ...` / `# assistant: ...`，没有预览时只有路径，和以前一致。`watch` 把新出现的 pending 和 push 各打一行（`pending <路径>` 或 `push <路径>`），预览同样用 TAB 接在路径后，适合盯着看。预览格式：`# reply: <回答第一行>`（Stop/SubagentStop）、`# response: ...`（PostToolUse）、`# error: ...`（PostToolUseFailure）、`# assistant: ...`（助手文本打开时）。加 `--once` 只打当前这一批。
@@ -159,13 +160,23 @@ notifier 默认关，而且当前版本即使打开也只把打算发给 Cursor 
 
 ## 怎么判断结束
 
-同时看这三处，以进程退出为准：
+有序：**先读终端态文件，再看进程，最后看事件日志。**
 
-1. `claude` 进程退出码。
-2. `stream-json` 里 `"type":"result"` 的那一行（成功时 `subtype` 一般为 `success`，失败时 `is_error` 为 true）。
-3. 事件日志里的 `Stop`。你 ack 之后进程才会真正结束；block 会让它再做一轮。`SessionEnd` 是异步日志，可能稍晚出现。
+1. `python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py status "$CC_TASK_ID"`（AHP 目录加 `--ahp`），或直接读 `$CC_BRIDGE_DIR/tasks/$CC_TASK_ID/status.json`。`SessionEnd` 时写入，`state` 固定 `ended`；同时有 `ended_at`、`session_id`、`session_end_reason`、`stop_accepted`（`true` 已验收 / `false` 未验收 / `null` 没走过 Stop，例如 `max_turns`）、`stop_seq`。没有这个文件时命令打一行 `missing: <路径>`。
+2. `claude` 进程退出码。
+3. `stream-json` 里 `"type":"result"` 的那一行（成功时 `subtype` 一般为 `success`，失败时 `is_error` 为 true）。
+4. 事件日志里的 `Stop`。你 ack 之后进程才会真正结束；block 会让它再做一轮。`SessionEnd` 是异步日志，可能稍晚出现，所以 step 1 只在它写完之后才有效。
 
 没写 pending 回复之前，进程会停在 PreToolUse、PermissionRequest、Elicitation 或 Stop 上。push 和 log 不挡进程。
+
+### 复活 / 续写硬规则
+
+父会话被压缩后继续、或监督进程重启后接手一个已知的 `CC_TASK_ID` 时，**第一件事是 `bridge.py status <task>`**（或直接读那个文件），然后才说话。
+
+- 已经 `state: ended`：对用户的第一句话必须是终端结果——`stop_accepted` 的含义、`session_end_reason`、`ended_at`，再补文件 / 测试 / cost。
+- **禁止**在看到 `ended` 之后还先发「正在修…」「还在跑」「稍等，我继续」这类过期状态。进程已经退出，`pending` 里没有等你回复的项；把它们当成新任务的前提就错了。
+- 要接着做，就换一个新的 `CC_TASK_ID` 重开一次；不要往已结束的旧任务目录里续写。
+- 只有 `missing:` 才表示还没有终端证据：这时再看进程是否还活着，然后照常走 pending / push 循环。
 
 ## AHP v1（0.2.0 起）
 
