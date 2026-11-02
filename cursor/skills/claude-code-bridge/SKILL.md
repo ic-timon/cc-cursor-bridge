@@ -126,6 +126,12 @@ WorktreeCreate 在 hooks 里保持同步：脚本自己建好 git worktree 并�
 
 MessageDisplay 自带 `delta`（助手文本片段）、`message_id`、`final`。要把 CC 中间的文本实时带给监督者，设 `CC_BRIDGE_ASSISTANT_TEXT=1`，或把 `config/bridge.json` 的 `assistant_text.enabled` 设为 `true`：插件会把 MessageDisplay 从 log 改成 push，通知里带 `assistant_text`、`message_id`、`turn_id`、`index`、`final`、`transcript_path`。选它而不是按偏移量读 transcript，是因为事件里已经有片段，不用处理文件增长、半行 JSON 和多个异步 hook 并发读取。片段按 `message_id` 归组，`final: true` 表示这条消息结束；某段超过 `log.max_field_chars` 时主通知截断，完整文本在同目录 `.full.json`。开关关闭时 MessageDisplay 仍是 log，行为与之前完全一致。
 
+## 任务骨架与审查节奏
+
+实现会话的 prompt 用 GOAL / MUST / VERIFY / OUT 四段（完整可抄版本见仓库 `docs/USAGE.md` 的「监督实现会话」）：GOAL 一句话写可观察结果；MUST 逐条编号、写成可检查的句子并写清边界；VERIFY 只写能跑的命令或能查的产物；OUT 写允许路径、禁止项、分支和 PR 要求。MUST 编号是后面 block 的引用锚点，没有编号就不算 MUST。
+
+固定节奏**一次清完再审**：实现 → 冻结 SHA（`git rev-parse HEAD`，未提交时取 diff 哈希）→ 只读对抗审查（另起只读会话，针对该 SHA）→ 把结论压成按 MUST 编号的短 punch list → 换新 `CC_TASK_ID` 开下一个实现会话。不要在修复中途穿插对抗性审查（SHA 一直在变，结论对不上）；不要把多页审查原文粘进实现 prompt（只喂压缩后的 punch list，原文留在审查记录）。
+
 ## 你的循环
 
 `claude -p` 放后台。每一轮先处理会卡住的 pending，再批量读 push：
@@ -145,7 +151,7 @@ python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py status "$CC_TASK_ID"
 - PreToolUse：`{"decision":"allow|deny|ask|defer","reason":"...","updatedInput":{...}}`
 - PermissionRequest：`{"decision":"allow|deny","message":"...","updatedInput":{...}}`
 - Elicitation：`{"decision":"accept|decline"}`
-- Stop：这是验收。测试或要求还没满足时 `{"decision":"block","reason":"具体缺什么"}`，让 Claude Code 继续做；满足了就 `{"ack":true}` 结束。通知里的 `last_assistant_message` 是 CC 的最后一条回答，验收前先看它。`stop_hook_active` 为 true 时，没有明确的 block 就让它停。每个任务最多阻断 `stop.max_blocks` 次（默认 3），到了上限即使再 block 也放行结束。**外部依赖这次会话解不了时**（例如 CI runner 离线、公平队列被压测占满）：应 `{"ack":true}`，把缺口写进 PR/报告；不要用同一理由反复 block Stop，也不要抬高 `CC_BRIDGE_STOP_MAX_BLOCKS` 空转
+- Stop：这是验收。测试或要求还没满足时 `{"decision":"block","reason":"具体缺什么"}`，让 Claude Code 继续做；满足了就 `{"ack":true}` 结束。通知里的 `last_assistant_message` 是 CC 的最后一条回答，验收前先看它。`block.reason` 必须引用 prompt 里的 MUST 编号（例如 `MUST 2：只允许改 docs/`），不写「再检查一下」这种没有可验对象的理由。**自己重跑 VERIFY**，不要只信这条回答，也不要只信 `stop_accepted: true`——那只是某次 Stop 被 ack 了。`stop_hook_active` 为 true 时，没有明确的 block 就让它停。每个任务最多阻断 `stop.max_blocks` 次（默认 3），到了上限即使再 block 也放行结束；不要为了多跑几轮抬高 `CC_BRIDGE_STOP_MAX_BLOCKS`，到上限说明 prompt 的验收条件没写清。**外部依赖这次会话解不了时**（例如 CI runner 离线、公平队列被压测占满）：应 `{"ack":true}`，把缺口写进 PR/报告；不要用同一理由反复 block Stop，也不要抬高 `CC_BRIDGE_STOP_MAX_BLOCKS` 空转
 - 其余事件在 `wait_all` 里才会要回复：可阻断的用 `{"decision":"block","reason":"..."}`，否则 `{"ack":true}`
 
 命令和文件内容超过上限时（默认命令 4000 字、文件内容 2000 字），短文件里该字段是一个带 `text`、`truncated: true`、`original_length` 和 `sha256` 的对象，完整且已脱敏的正文在同目录的 `<seq>-<事件>.full.json`。Stop/SubagentStop 的 `last_assistant_message`、PostToolUse 的 `tool_response`、PostToolUseFailure 的 `error`、开关打开时的 `assistant_text` 也走同一套；其中工具返回和错误在主通知里按 `log.max_field_chars`（默认 240）截断。命令或回答被截断时，先读这份 `.full.json` 再决定 allow 或验收。
@@ -166,6 +172,7 @@ notifier 默认关，而且当前版本即使打开也只把打算发给 Cursor 
 2. `claude` 进程退出码。
 3. `stream-json` 里 `"type":"result"` 的那一行（成功时 `subtype` 一般为 `success`，失败时 `is_error` 为 true）。
 4. 事件日志里的 `Stop`。你 ack 之后进程才会真正结束；block 会让它再做一轮。`SessionEnd` 是异步日志，可能稍晚出现，所以 step 1 只在它写完之后才有效。
+5. 验收结论要自己跑 prompt 里的 VERIFY 得出。`stop_accepted: true` 只说明某次 Stop 被 ack，不等于检查通过；`max_turns` 且 `stop_accepted: null` 说明轮次用光、根本没走验收。
 
 没写 pending 回复之前，进程会停在 PreToolUse、PermissionRequest、Elicitation 或 Stop 上。push 和 log 不挡进程。
 
@@ -175,7 +182,8 @@ notifier 默认关，而且当前版本即使打开也只把打算发给 Cursor 
 
 - 已经 `state: ended`：对用户的第一句话必须是终端结果——`stop_accepted` 的含义、`session_end_reason`、`ended_at`，再补文件 / 测试 / cost。
 - **禁止**在看到 `ended` 之后还先发「正在修…」「还在跑」「稍等，我继续」这类过期状态。进程已经退出，`pending` 里没有等你回复的项；把它们当成新任务的前提就错了。
-- 要接着做，就换一个新的 `CC_TASK_ID` 重开一次；不要往已结束的旧任务目录里续写。
+- 要接着做，就换一个新的 `CC_TASK_ID` 重开一次；不要往已结束的旧任务目录里续写。用新的 GOAL / MUST / VERIFY / OUT 骨架，按「一次清完再审」的节奏走，不要原样空跑同一份含糊 prompt。
+- `session_end_reason` 是 `max_turns`、`stop_accepted` 是 `null` 时，说明这一轮不是验收结束：把 MUST / VERIFY 收紧成更小、更具体的一份，换新 `CC_TASK_ID` 重开。
 - 只有 `missing:` 才表示还没有终端证据：这时再看进程是否还活着，然后照常走 pending / push 循环。
 
 ## AHP v1（0.2.0 起）

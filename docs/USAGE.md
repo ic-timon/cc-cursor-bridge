@@ -70,6 +70,45 @@ scripts/install_cursor_skill.sh
 
 Agent 会做这些事：用 `scripts/run_claude_bridged.sh`（`--plugin-dir` 指向 `~/Sync/Test/cc-cursor-bridge`）在后台启动 `claude -p`，prompt 走 stdin，循环 `pending` 然后 `reply`，用 `push` 批量读通知，在 Stop 上做验收。
 
+## 监督实现会话：GOAL / MUST / VERIFY / OUT
+
+监督一个实现会话时，prompt 用这套骨架写。它把「做什么」「不能碰什么」「怎么算做完」「交付什么」分开，Stop 验收才有可引用的编号。整段放进 `--prompt-file`，尖括号换成你的内容：
+
+```text
+GOAL
+<一句话说清这次要交付的可观察结果。>
+
+MUST
+1. <必须满足的行为，写成可检查的句子，例如「迁移后旧测试全绿」。>
+2. <必须遵守的边界：只改哪些文件、不许改哪些、不能跑哪些命令。>
+3. <必须复用的既有约定：先读哪个文件、按什么格式输出。>
+
+VERIFY
+1. <要跑的确定性命令，例如 `make test`、`rg -n '...'`。>
+2. <要检查的产物，例如 `git diff --stat` 只出现允许的路径。>
+
+OUT
+- 允许改动的路径：<path>, <path>
+- 不允许：<例如 merge、--dangerously-*、git add -A>
+- 分支 / 工作目录：<branch>
+```
+
+- `MUST` 每条带编号。Stop 的 `block.reason` 要引用编号（例如 `MUST 2`），而不是「再完善一下」。
+- `VERIFY` 写成命令或可执行的检查，不写形容词。监督者自己跑一遍，不转述 Claude 的自述。
+- `OUT` 写清允许路径、禁止项、分支和 PR 要求。实现会话只能落在这些路径里。
+
+### 一次清完再审
+
+一个实现会话固定这个节奏：
+
+1. **实现**：只按 GOAL / MUST 改，中途不插对抗性审查。
+2. **冻结 SHA**：实现停下后记 `git rev-parse HEAD`（工作区未提交时记 `git diff` 的哈希），后面所有审查都针对这个 SHA。
+3. **只读对抗审查**：另起只读会话或 agent，带着 MUST 和冻结的 SHA 找问题；它不改文件。
+4. **压缩 punch list**：把审查结论压成按 MUST 编号的短清单，每条一行，写清期望行为和检查命令，丢掉散文。
+5. **换新 `CC_TASK_ID`**：拿这份 punch list 开下一个实现会话。
+
+禁止两件事：一是在修复过程中穿插对抗性审查——SHA 一直在变，结论对不上，Stop 也没法验收；二是把多页审查原文粘进实现 prompt——实现会话只吃压缩后的 punch list，原文留在审查记录里。
+
 ## 自己用命令行
 
 ### 环境变量
@@ -180,6 +219,10 @@ python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py status "$CC_TASK_ID" --ah
 - **禁止**先发「正在修…」「还在跑」「稍等，我继续」这类过期状态。进程已经退出，`pending` 里没有东西等你回复。
 - 想看细节再读 `events.jsonl`、`approvals.jsonl`、`acks/`；要重跑就换一个新的 `CC_TASK_ID`，不要往旧任务目录里续。
 - 文件不存在（`missing:`）才说明还没有终端证据：接着看进程是否还活着，再按 pending / push 的常规循环处理。
+- 监督者验收时自己跑 `VERIFY` 里的命令，不要只信 Claude 最后一条回答，也不要只信 `stop_accepted: true`——那只说明某次 Stop 被 ack 了，不说明检查通过。
+- `block.reason` 必须引用 MUST 编号（例如 `MUST 2：只允许改 docs/`），不写「再检查一下」「更完善」这类没有可验对象的理由。找不到对应的 MUST 编号，就不该 block，该 ack 后另开任务。
+- 不要为了多跑几轮去抬 `stop.max_blocks` / `CC_BRIDGE_STOP_MAX_BLOCKS`。到了上限就是「这个 prompt 没把验收条件写清楚」的信号。
+- `session_end_reason` 是 `max_turns`、`stop_accepted` 是 `null`：说明这一轮不是验收结束，而是轮次用光了。这时的正确动作是把 MUST / VERIFY 收紧成更小、更具体的一份清单，换新 `CC_TASK_ID` 重开；**不要**原样空跑同一份含糊 prompt，也不要在这个任务目录里续。
 
 ### 四个 WAIT 事件的回复
 
@@ -194,8 +237,8 @@ python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq>
 # Elicitation
 python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"decision":"accept"}'
 
-# Stop。没满足就 block，满足了 ack
-python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"decision":"block","reason":"补一个 n=30 的测试再跑"}'
+# Stop。没满足就 block，reason 引用 MUST 编号；满足了 ack
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"decision":"block","reason":"MUST 2：补一个 n=30 的测试再跑"}'
 python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py reply "$CC_TASK_ID" <seq> '{"ack":true}'
 # 外部依赖这次解不了（runner 离线等）：ack，缺口写进 PR；不要同一理由反复 block，也不要抬 CC_BRIDGE_STOP_MAX_BLOCKS
 ```
@@ -254,6 +297,8 @@ python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py status "$CC_TASK_ID"
 ```
 
 `status.json` 里的 `state: ended` 就是「进程已经退出」的耐久证据，`stop_accepted` 说明验收结论。父会话压缩或监督进程重启后接手同一个 `CC_TASK_ID` 时，先读它再开口：已经 `ended` 就按已结束汇报，不要先发「正在修…」。详见上面的「任务结束态：status.json」。
+
+监督者自己要跑 `VERIFY` 的命令，不要用 Claude 的自述代替。`max_turns` 结束、`stop_accepted` 为 `null` 时，收紧 MUST / VERIFY，换新 `CC_TASK_ID` 重开，不要空跑同一份 prompt。
 
 进程本身的最终结论仍以退出码和流里 `"type":"result"` 那一行为准。Stop 被 ack 之后进程才会真正停。
 

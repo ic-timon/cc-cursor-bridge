@@ -141,7 +141,7 @@ SessionStart 和 WorktreeCreate 在 `hooks.json` 里保持同步。SessionStart 
 
 助手命令：`python3 scripts/bridge.py pending <task>`、`reply <task> <seq> <json>`、`push <task> [--since <seq>]`、`watch <task>`、`status <task>`。
 
-`SessionEnd` 会在任务目录写 `status.json`（`state: ended`、`ended_at`、`session_end_reason`、`stop_accepted` 等）。父会话压缩或监督重启后接手同一个 `CC_TASK_ID`，先用 `status <task>` 读它；`state: ended` 表示进程已退出，第一句话就该是终端结果，不要先报「正在修」。详见 `docs/USAGE.md` 的「任务结束态：status.json」。
+`SessionEnd` 会在任务目录写 `status.json`（`state: ended`、`ended_at`、`session_end_reason`、`stop_accepted` 等）。父会话压缩或监督重启后接手同一个 `CC_TASK_ID`，先用 `status <task>` 读它；`state: ended` 表示进程已退出，第一句话就该是终端结果，不要先报「正在修」。监督实现会话的 prompt 骨架（GOAL / MUST / VERIFY / OUT）、一次清完再审的节奏和 Stop 自验收怎么写，见 [docs/USAGE.md 的「监督实现会话」](docs/USAGE.md#监督实现会话goal--must--verify--out)。详见 `docs/USAGE.md` 的「任务结束态：status.json」。
 
 旧的窄等待 `CC_BRIDGE_WAIT=1` 只在事件模式为 `log` 时再生效；0.2.0 起它在 AHP 目录里也是一个 gate（pending + ack），旧目录仍写 `pending/<tool_use_id>.json`。
 
