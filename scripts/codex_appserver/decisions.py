@@ -160,6 +160,8 @@ def unsupported_approval_scope(params: dict) -> str | None:
     """
     if not isinstance(params, dict):
         return None
+    if params.get("networkApprovalContext") is not None:
+        return "networkApprovalContext (managed-network approval) is not supported"
     if params.get("grantRoot"):
         return "grantRoot is not supported"
     for key in ("proposedExecpolicyAmendment", "proposedNetworkPolicyAmendments",
@@ -185,3 +187,13 @@ def timeout_decision() -> str:
 
 def default_decisions_for_event() -> list:
     return ["allow", "deny"]
+
+
+def decisions_for_approval(context: Mapping[str, Any]) -> list:
+    """Advertise only one-shot decisions; denial always remains available."""
+    if "availableDecisions" in context:
+        menu = context["availableDecisions"]
+        if not isinstance(menu, list) or not any(
+                isinstance(value, str) and value in ALLOW_DECISIONS for value in menu):
+            return ["deny"]
+    return default_decisions_for_event()

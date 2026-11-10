@@ -396,6 +396,70 @@ class AdapterTests(unittest.TestCase):
                 self.assertEqual(run.finish()[0], 0)
                 self.assertEqual(run.approvals()[0]["accepted"], allow)
 
+    def test_early_approval_waits_for_authoritative_turn_identity(self) -> None:
+        for approval_turn in ("turn-1", "other-turn"):
+            with self.subTest(approval_turn=approval_turn):
+                run = self.launch({
+                    "requests": [{"method": COMMAND, "params": {"turnId": approval_turn}}],
+                    "omit_turn_started": True, "approval_before_start_response": True,
+                    "wait_for_reply_before_start_response": True,
+                })
+                env = run.pending()[0]
+                run.reply(env, {"decision": "allow"})
+                code, status, _ = run.finish()
+                self.assertEqual(status["turn_id"], "turn-1")
+                self.assertTrue(any(row["event"] == "early_reply_before_start_response" for row in run.records()))
+                if approval_turn == "turn-1":
+                    self.assertEqual(code, 0)
+                    self.assertTrue(run.approvals()[0]["accepted"])
+                else:
+                    self.assertNotEqual(code, 0)
+                    self.assertEqual(run.ack(env)["applied_decision"], "deny")
+                    self.assertIn("mismatch", run.ack(env)["reason"])
+                    self.assert_not_executed(run)
+
+    def test_file_change_cache_is_bound_to_thread_turn_and_item(self) -> None:
+        for context in ({"threadId": "other-thread"}, {"turnId": "other-turn"},
+                        {"turnId": None}, {"item": {"id": "other-item", "type": "fileChange", "changes": []}}):
+            with self.subTest(context=context):
+                run = self.launch({"requests": [{"method": FILE_CHANGE, "item_context": context}]})
+                code, status, _ = run.finish()
+                self.assertNotEqual(code, 0)
+                self.assertTrue(status["fail_closed"])
+                self.assertIn("cannot be correlated", status["last_gate"]["reason"])
+                self.assert_not_executed(run)
+
+    def test_early_foreign_turn_item_cannot_supply_file_change_context(self) -> None:
+        run = self.launch({
+            "requests": [{"method": FILE_CHANGE, "item_context": {"turnId": "other-turn"}}],
+            "omit_turn_started": True, "approval_before_start_response": True,
+        })
+        code, status, _ = run.finish()
+        self.assertNotEqual(code, 0)
+        self.assertIn("cannot be correlated", status["last_gate"]["reason"])
+        self.assert_not_executed(run)
+
+    def test_foreign_item_notifications_do_not_replace_active_context(self) -> None:
+        changes = [{"path": "active.txt", "diff": "+active"}]
+        run = self.launch({
+            "notifications": [
+                {"method": "item/started", "params": {
+                    "threadId": "thread-1", "turnId": "turn-1",
+                    "item": {"id": "item-1", "type": "fileChange", "changes": changes}}},
+                {"method": "item/completed", "params": {
+                    "threadId": "thread-1", "turnId": "other-turn",
+                    "item": {"id": "item-1", "type": "fileChange", "changes": []}}},
+            ],
+            "requests": [{"method": FILE_CHANGE, "item_context": {"threadId": "other-thread"}}],
+        })
+        env = run.pending()[0]
+        self.assertEqual(env["payload"]["tool_input"]["changes"], changes)
+        run.reply(env, {"decision": "deny"})
+        self.assertEqual(run.finish()[0], 0)
+        events = [json.loads(line) for line in (run.task_dir / "events.jsonl").read_text().splitlines()]
+        self.assertFalse(any(event["event"] == "tool.post" for event in events))
+        self.assert_not_executed(run)
+
     def test_legacy_review_decisions(self) -> None:
         for method in ("execCommandApproval", "applyPatchApproval"):
             with self.subTest(method=method):
@@ -423,13 +487,16 @@ class AdapterTests(unittest.TestCase):
 
     def test_failed_and_interrupted_turn_status_is_preserved(self) -> None:
         for turn_status in ("failed", "interrupted"):
-            with self.subTest(turn_status=turn_status):
-                run = self.launch({"turn_status": turn_status})
-                code, status, _ = run.finish()
-                self.assertNotEqual(code, 0)
-                self.assertEqual(status["state"], "ended")
-                self.assertEqual(status["turn_status"], turn_status)
-                self.assertFalse(status["success"])
+            for turn_error in (None, {"message": "fixture native turn error", "codexErrorInfo": "other"}):
+                with self.subTest(turn_status=turn_status, turn_error=turn_error):
+                    run = self.launch({"turn_status": turn_status, "turn_error": turn_error})
+                    code, status, _ = run.finish()
+                    self.assertNotEqual(code, 0)
+                    self.assertEqual(status["state"], "ended")
+                    self.assertEqual(status["turn_status"], turn_status)
+                    self.assertEqual(status["session_end_reason"], turn_status)
+                    self.assertEqual(status["error"], turn_error or "")
+                    self.assertFalse(status["success"])
 
     def test_shutdown_kills_uncooperative_server(self) -> None:
         run = self.launch({"ignore_termination": True})
@@ -483,15 +550,29 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(run.ack(env)["via"], "reply")
         self.assert_not_executed(run)
 
-    def test_approval_context_is_recorded_and_scope_extensions_are_denied(self) -> None:
-        params = {
-            "availableDecisions": ["accept", "acceptForSession", "cancel"],
-            "networkApprovalContext": {"host": "example.test", "reason": "fixture"},
-            "additionalPermissions": {"network": {"enabled": True}},
-            "grantRoot": "/tmp",
-            "proposedExecpolicyAmendment": ["echo"],
-        }
-        run = self.launch({"requests": [{"method": COMMAND, "params": params}]})
+    def test_restored_stashed_allow_does_not_authorize_gate(self) -> None:
+        temp = tempfile.TemporaryDirectory(prefix="codex-adapter-restore-")
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        replies = root / "ahp" / "tasks" / "fixture" / "replies"
+        replies.mkdir(parents=True)
+        for seq in range(1, 11):
+            path = replies / f"{seq}.json"
+            write_atomic(path, {"decision": "allow"})
+            old_time = time.time_ns() - 1_000_000_000
+            os.utime(path, ns=(old_time, old_time))
+        run = Run(root, {"requests": [{"method": COMMAND}]}, timeout=0.3)
+        self.addCleanup(run.cleanup)
+        env = run.pending()[0]
+        stashed = next(replies.glob(f"{env['seq']}.preexisting-*.json"))
+        stashed.replace(replies / f"{env['seq']}.json")
+        self.assertNotEqual(run.finish()[0], 0)
+        self.assertEqual(run.ack(env)["via"], "timeout")
+        self.assertEqual(run.ack(env)["applied_decision"], "deny")
+        self.assert_not_executed(run)
+
+    def assert_scope_denied(self, params: dict, reason: str) -> None:
+        run = self.launch({"requests": [{"method": COMMAND, "params": params}]}, timeout=0.3)
         # Scope extensions are denied immediately; no allow path is offered.
         code, status, _ = run.finish()
         self.assertNotEqual(code, 0)
@@ -500,13 +581,47 @@ class AdapterTests(unittest.TestCase):
         gates = [env for env in events if env.get("event") == "permission.request"]
         self.assertTrue(gates)
         ctx = gates[0]["payload"].get("approval_context") or {}
-        self.assertEqual(ctx.get("grantRoot"), "/tmp")
-        self.assertEqual(ctx.get("availableDecisions"), ["accept", "acceptForSession", "cancel"])
-        self.assertEqual((ctx.get("additionalPermissions") or {}).get("network"), {"enabled": True})
+        for key, value in params.items():
+            self.assertEqual(ctx.get(key), value)
+            self.assertEqual(gates[0]["native"].get(key), value)
         ack = json.loads(next((run.task_dir / "acks").glob("*.json")).read_text())
         self.assertEqual(ack["applied_decision"], "deny")
-        self.assertIn("not supported", ack.get("reason", ""))
+        self.assertEqual(ack["via"], "error")
+        self.assertIn(reason, ack.get("reason", ""))
         self.assert_not_executed(run)
+
+    def test_network_approval_context_alone_is_denied(self) -> None:
+        for context in ({"host": "example.test", "reason": "fixture"}, {}):
+            with self.subTest(context=context):
+                self.assert_scope_denied({"networkApprovalContext": context}, "networkApprovalContext")
+
+    def test_available_decisions_without_one_shot_accept_is_denied(self) -> None:
+        for menu in (["acceptForSession", "cancel"], ["decline"], [],
+                     [{"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["echo"]}}]):
+            with self.subTest(menu=menu):
+                self.assert_scope_denied({"availableDecisions": menu}, "availableDecisions")
+
+    def test_available_decisions_with_one_shot_accept_allows(self) -> None:
+        run = self.launch({"requests": [{"method": COMMAND, "params": {
+            "availableDecisions": ["accept", "acceptForSession", "cancel"], "networkApprovalContext": None}}]})
+        env = run.pending()[0]
+        self.assertEqual(env["decisions"], ["allow", "deny"])
+        run.reply(env, {"decision": "allow"})
+        self.assertEqual(run.finish()[0], 0)
+        self.assertTrue(run.approvals()[0]["accepted"])
+
+    def test_scope_extensions_are_individually_recorded_and_denied(self) -> None:
+        for params, reason in (
+            ({"grantRoot": "/tmp"}, "grantRoot"),
+            ({"additionalPermissions": {"network": {"enabled": True}}}, "network permission"),
+            ({"additionalPermissions": {"fileSystem": {"write": ["/tmp"]}}}, "filesystem permission"),
+            ({"permissions": {"network": {"enabled": True}}}, "network permission"),
+            *[({key: ["echo"]}, key) for key in (
+                "proposedExecpolicyAmendment", "proposedNetworkPolicyAmendments",
+                "proposed_execpolicy_amendment", "proposed_network_policy_amendments")],
+        ):
+            with self.subTest(params=params):
+                self.assert_scope_denied(params, reason)
 
     def test_supervisor_treats_unsuccessful_end_as_terminal(self) -> None:
         run = self.launch({"requests": [{"method": COMMAND}], "disconnect": True})

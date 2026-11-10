@@ -43,6 +43,7 @@ class Session:
         self.thread_id: Optional[str] = None
         self.turn_id: Optional[str] = None
         self.turn_status: Optional[str] = None
+        self.turn_error: Any = ""
         self.usage: dict = {}
         self.pending: dict = {}
         self.items: dict = {}
@@ -69,6 +70,10 @@ class Session:
             raise Cancelled("controller cancelled")
         pending = self.pending[key]
         env = pending["env"]
+        if decision == "allow" and (
+                not self.turn_id or env["native"]["turn_id"] != self.turn_id
+                or env["native"]["thread_id"] != self.thread_id):
+            decision, via, reason = "deny", "error", "approval does not match active turn"
         self.store.finish_gate(env, decision, via, reason)
         if self.cancelled:
             raise Cancelled("controller cancelled")
@@ -88,6 +93,12 @@ class Session:
             # Expired replies cannot revive a timed-out approval.
             if time.monotonic() >= pending["deadline"]:
                 self._resolve(key, "deny", "timeout", "approval reply timed out")
+            elif self.turn_id is None:
+                # An early request is not an authoritative turn identity. Wait
+                # for turn/start or turn/started before considering its reply.
+                continue
+            elif pending["env"]["native"]["turn_id"] != self.turn_id:
+                self._resolve(key, "deny", "error", "approval turn id mismatch")
             else:
                 reply = self.store.poll_reply(pending["env"])
                 if reply is not None:
@@ -97,10 +108,6 @@ class Session:
         method, request_id = message["method"], message["id"]
         kind = classify_server_request(method)
         if kind not in ("command", "fileChange"):
-            params = message.get("params") or {}
-            if (isinstance(params, dict) and params.get("threadId") == self.thread_id
-                    and not self.turn_id and isinstance(params.get("turnId"), str)):
-                self.turn_id = params["turnId"]
             error = (permissions_rejection()[1] if kind == "permissions" else
                      jsonrpc_error_payload(f"unsupported server request: {method}"))
             self.rpc.reply_error(request_id, error)
@@ -114,21 +121,26 @@ class Session:
         if not self.thread_id or thread_id != self.thread_id or not turn_id:
             self.rpc.reply_error(request_id, jsonrpc_error_payload("approval does not match active turn"))
             raise RPCError("approval does not match active turn")
-        if self.turn_id is None:
-            self.turn_id = turn_id
-        if turn_id != self.turn_id:
+        if self.turn_id is not None and turn_id != self.turn_id:
             self.rpc.reply_error(request_id, jsonrpc_error_payload("approval turn id mismatch"))
             raise RPCError("approval turn id mismatch")
         key = (type(request_id), request_id)
         if key in self.pending:
             raise RPCError("duplicate approval request id")
         params = dict(params, turnId=turn_id)
-        if kind == "fileChange" and "changes" not in params:
-            item = self.items.get(params.get("itemId"), {})
-            if "changes" in item:
+        context_error = None
+        if kind == "fileChange" and not any(
+                params.get(name) is not None for name in ("changes", "fileChanges", "file_changes")):
+            item_id = params.get("itemId", params.get("callId"))
+            item = self.items.get((thread_id, turn_id, item_id), {})
+            if item.get("type") == "fileChange" and item.get("changes") is not None:
                 params["changes"] = item["changes"]
+            else:
+                context_error = "fileChange operation context cannot be correlated to active thread/turn/item"
         env = self.store.open_gate(method, request_id, params)
-        scope = unsupported_approval_scope(params)
+        scope = unsupported_approval_scope(env["payload"]["approval_context"]) or context_error
+        if not scope and "allow" not in env["decisions"]:
+            scope = "availableDecisions does not offer a one-shot accept/allow"
         if scope:
             self.store.finish_gate(env, "deny", "error", scope)
             self.rpc.reply_result(request_id, approval_result(method, "deny", scope))
@@ -169,17 +181,23 @@ class Session:
                 raise RPCError("unknown turn completion status")
             if self.pending:
                 raise RPCError("turn completed with outstanding approvals")
-            self.turn_id, self.turn_status = turn["id"], status
+            if self.turn_id is None:
+                raise RPCError("turn completed before active turn was established")
+            self.turn_status = status
             if isinstance(turn.get("usage"), dict):
                 self.usage = turn["usage"]
-            if turn.get("error"):
+            if turn.get("error") is not None:
+                self.turn_error = turn["error"]
                 self.store.notice("producer.error", {"stage": "turn", "message": str(turn["error"])})
         elif method == "thread/tokenUsage/updated":
             if params.get("turnId", self.turn_id) == self.turn_id:
                 self.usage = params.get("tokenUsage") or {}
         elif method in ("item/started", "item/completed"):
+            thread_id, turn_id = params.get("threadId"), params.get("turnId")
+            if not thread_id or not turn_id or (self.turn_id and turn_id != self.turn_id):
+                return
             item = params.get("item") or {}
-            self.items[item["id"]] = item
+            self.items[(thread_id, turn_id, item["id"])] = item
             if method == "item/completed":
                 if item.get("type") == "agentMessage":
                     self.store.notice("message.delta", {"message_id": item["id"], "kind": "text",
@@ -270,7 +288,8 @@ class Session:
             if self.cancelled:
                 raise Cancelled("controller cancelled")
             final_state = "ended"
-            end_reason = "completed"
+            end_reason = self.turn_status
+            error = self.turn_error
         except (Exception, KeyboardInterrupt) as exc:
             self.fail_closed = True
             outcome = "cancelled" if isinstance(exc, (Cancelled, KeyboardInterrupt)) else "failed"
@@ -291,7 +310,7 @@ class Session:
                     )
                     success = (end_reason == "completed" and self.turn_status == "completed"
                                and not self.fail_closed)
-                    self.store.notice("session.end", {"reason": error or end_reason,
+                    self.store.notice("session.end", {"reason": str(error) if error else end_reason,
                                                       "turn_status": self.turn_status,
                                                       "session_end_reason": end_reason,
                                                       "tokenUsage": self.usage})

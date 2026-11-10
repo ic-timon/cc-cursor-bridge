@@ -53,6 +53,10 @@ from the gate timeout. Both timeouts must be finite and positive.
 - `acceptForSession`, execpolicy amendments, network policy amendments,
   and permission grants are rejected. An invalid reply is treated as
   deny (fail-closed), not as a retry hook for a broader grant.
+  A non-null `networkApprovalContext` is a managed-network approval prompt
+  and is rejected immediately. When `availableDecisions` is advertised,
+  it must include a one-shot `accept`/`allow` to permit an allow reply;
+  denial remains available regardless of that menu.
 - Supported server requests: `item/commandExecution/requestApproval` and
   `item/fileChange/requestApproval` (plus legacy `execCommandApproval` /
   `applyPatchApproval`, mapped with the generated ReviewDecision `denied`
@@ -82,6 +86,11 @@ Each approval is one AHP gate:
 A reply is applied only when `replies/<seq>.json` matches that pending
 seq. Existing `python3 scripts/bridge.py reply TASK SEQ '{"decision":"deny"}' --ahp`
 is the controller write path.
+
+Approval requests cannot establish the active turn identity. An early
+approval waits for `turn/start` or `turn/started`; an allow requires a
+matching active thread and turn. Cached fileChange context is bound to
+thread, turn, and item id; uncorrelated context is denied.
 
 ## Timeout, cancel, disconnect
 
@@ -122,11 +131,20 @@ cancel/interrupt ends the turn fail-closed.
   detach; include `success`, `session_end_reason`, and `turn_status`
   from `turn/completed` (`completed` | `interrupted` | `failed`) when
   known. Do not report success if the turn was cancelled or failed.
+  Native `failed` or `interrupted` completions preserve that value as
+  `session_end_reason`, keep `success: false`, and copy the native turn
+  error into `status.error` when present. The terminal state stays `ended`.
   `success` is false and the CLI exits nonzero after a gate timeout, invalid
   reply, or unsupported request, even if a declined gate's turn subsequently
   completes. `last_gate` preserves the latest resolved gate outcome.
   A pre-existing `replies/<seq>.json` is stashed before a new gate of
-  that seq is published, so a stale allow cannot authorize it.
+  that seq is published and again immediately after publication. The
+  controller records the published pending file's nanosecond mtime on
+  the gate and in the audit log. Replies with an older file mtime are
+  ignored. Stashed file identities also prevent restoring an allow by
+  rename when filesystem timestamps tie. A fresh post-publication
+  `write_atomic` reply remains valid. This does not resume an old gate
+  or provide full reconnect.
 - `events.jsonl` — redacted audit log.
 - Optional `--jsonl` RPC transcript: secrets redacted; **token-usage
   metrics kept as numbers** (`inputTokens`, `totalTokens`, …). A key

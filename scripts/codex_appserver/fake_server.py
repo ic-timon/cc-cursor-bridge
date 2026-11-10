@@ -60,7 +60,10 @@ class FakeServer:
         self.notify("item/completed", {"threadId": "thread-1", "turnId": "turn-1",
                                        "item": {"id": "answer-1", "type": "agentMessage",
                                                 "text": "done " + self.scenario.get("secret", "")}})
-        self.notify("turn/completed", {"threadId": "thread-1", "turn": {"id": "turn-1", "status": status}})
+        turn = {"id": "turn-1", "status": status}
+        if "turn_error" in self.scenario:
+            turn["error"] = self.scenario["turn_error"]
+        self.notify("turn/completed", {"threadId": "thread-1", "turn": turn})
 
     def next_request(self) -> None:
         if self.index >= len(self.requests):
@@ -77,7 +80,8 @@ class FakeServer:
         if "fileChange" in method or method == "applyPatchApproval":
             changes = [{"path": str(Path.cwd() / "simulated.txt"), "kind": {"type": "add"}, "diff": "+simulated"}]
             self.notify("item/started", {"threadId": "thread-1", "turnId": "turn-1",
-                                         "item": {"id": item_id, "type": "fileChange", "changes": changes}})
+                                         "item": {"id": item_id, "type": "fileChange", "changes": changes},
+                                         **spec.get("item_context", {})})
             params.pop("command")
         if method in ("execCommandApproval", "applyPatchApproval"):
             params.update(conversationId=params.pop("threadId"), callId=params.pop("itemId"))
@@ -108,13 +112,24 @@ class FakeServer:
         elif method == "thread/start":
             self.send({"id": request_id, "result": {"thread": {"id": "thread-1"}}})
         elif method == "turn/start":
-            self.notify("turn/started", {"threadId": "thread-1", "turn": {"id": "turn-1", "status": "inProgress"}})
+            if not self.scenario.get("omit_turn_started"):
+                self.notify("turn/started", {"threadId": "thread-1", "turn": {"id": "turn-1", "status": "inProgress"}})
             if not self.scenario.get("approval_before_start_response"):
                 self.send({"id": request_id, "result": {"turn": {"id": "turn-1", "status": "inProgress"}}})
             for notification in self.scenario.get("notifications", []):
                 self.send(notification)
             self.next_request()
             if self.scenario.get("approval_before_start_response"):
+                if self.scenario.get("wait_for_reply_before_start_response"):
+                    # Hold the authoritative identity until the consumer has
+                    # written its reply. This fixture never executes commands.
+                    deadline = time.monotonic() + 2
+                    root = Path(os.environ["CC_BRIDGE_AHP_DIR"])
+                    while not list(root.glob("tasks/*/replies/*.json")):
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("consumer did not write early reply")
+                        time.sleep(0.01)
+                    self.record("early_reply_before_start_response")
                 self.send({"id": request_id, "result": {"turn": {"id": "turn-1", "status": "inProgress"}}})
         elif method == "turn/interrupt":
             self.waiting = None
