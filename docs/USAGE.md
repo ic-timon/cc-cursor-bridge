@@ -300,7 +300,44 @@ python3 ~/Sync/Test/cc-cursor-bridge/scripts/bridge.py status "$CC_TASK_ID"
 
 监督者自己要跑 `VERIFY` 的命令，不要用 Claude 的自述代替。`max_turns` 结束、`stop_accepted` 为 `null` 时，收紧 MUST / VERIFY，换新 `CC_TASK_ID` 重开，不要空跑同一份 prompt。
 
-进程本身的最终结论仍以退出码和流里 `"type":"result"` 那一行为准。Stop 被 ack 之后进程才会真正停。
+终态的权威顺序是：先读 `status.json`（`SessionEnd` 写入、`bridge.py status` 打印的耐久终端态），再看进程退出码，最后才是 stream-json 里的 `"type":"result"` 和 `events.jsonl`。后面的只能补充细节：`SessionEnd` 作为 events 日志仍可能滞后，退出码和 `result` 行也可能根本没来得及写，所以它们都不高于 `status.json`。Stop 被 ack 之后进程才会真正停。
+
+### 可重连的监督进程（supervise.py）
+
+`watch` 打一批就退出。要一个能反复断开、重连到同一个 `CC_TASK_ID` 的本地观察者，用 `scripts/supervise.py`：
+
+```bash
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/supervise.py "$CC_TASK_ID"
+# Ctrl-C 或 kill -TERM 断开；再跑同一条命令就是重连，任务和 Claude 都不受影响
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/supervise.py "$CC_TASK_ID" --once      # 只看一眼
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/supervise.py "$CC_TASK_ID" --for 600    # 最多看 10 分钟
+python3 ~/Sync/Test/cc-cursor-bridge/scripts/supervise.py "$CC_TASK_ID" --interval 2  # 轮询间隔，默认 1 秒
+```
+
+它做的事只有两件：每轮读一次 `bridge.py status`（同一个 `status.json`，不另造格式）和 `bridge.py pending`，把新的等待项打到 stdout。加上 `--ahp` 就看 AHP 目录（`CC_BRIDGE_LEGACY=0` 时自动如此）。
+
+**重连契约**
+
+- 断开和重连都不启动、不结束 Claude，不删 pending 事件，不写 `replies/`、`acks/`、`approvals.jsonl`、`status.json`。pending 和 `seq` 在断开前后逐字节不变（测试里对整棵任务目录做了快照对比）。
+- 只是观察，不替你回答。等待项还是用 `bridge.py reply <task> <seq> <json>`，审批强度与没有监督进程时完全一样。它不会 auto-allow Write/Edit、Bash 或任何命令，不会替 `PermissionRequest`、`Elicitation`、`Stop` 表态，也没有策略引擎：规则文件是唯一的策略来源，回复是你的动作。
+- 终端态：初始 attach 和每一轮监控都检查 `state: ended`。一旦读到就打印终端摘要并退出 0：
+
+  ```text
+  task <task> ended
+    state: ended
+    stop_accepted: true          # true 已验收 / false 未验收 / null 没有 Stop 走过
+    reason: other                # session_end_reason
+    ended_at: 2026-11-10T14:24:00.000+08:00
+    stop_seq: 12
+    status_file: ~/.cc-bridge/tasks/<task>/status.json
+  ```
+
+  `status.json` 不存在时只会打 `status: missing <path>`，不会推成「还在跑」或「已经完成」；文件坏掉是 `status: unreadable (...)`，`state` 不是 `ended` 是 `status: unrecognized (...)`。这三种都继续观察。`SessionEnd` 仍然是异步写，监督进程不参与、也不阻塞它。
+- 并发：一个任务同时只允许一个观察者。它持有 `$CC_BRIDGE_DIR/locks/<task>.observer.lock` 上的排他 `flock`；第二个实例直接退出 3，stderr 写明占用者的 pid 和 attach 时间。flock 由内核在进程退出时释放，崩溃或 `kill -9` 也不会留下死锁；锁文件里的内容只是提示，不是锁本身。恢复后的观察者只读，不会补写任何状态，所以不存在「两个观察者各回一次」的双写；回复本身仍由 `bridge.py reply` 的单写规则保证（同一 seq 已有不同回复就 exit 2）。
+- 重连不会给 Claude 续命。等待项的 timeout 仍是 `wait_all.timeout_seconds` / `CC_BRIDGE_WAIT_ALL_TIMEOUT`（默认 120 秒，封顶 170 秒），到点照旧按默认决定（PreToolUse / PermissionRequest 拒绝，Elicitation decline，Stop 放行结束）。监督进程断了又连上，已经超时的项不会回来。
+- 只读的边界也包括 cwd：观察者不会创建任务目录。任务目录还不存在时，`status: missing` 和空的 pending 就是它看到的全部。
+
+如果想减少纯 `Read` 的等待，`auto_allow.cwd_read` / `CC_BRIDGE_AUTO_ALLOW_CWD_READ=1` 是已有开关，但它只对会话 cwd 内的 `Read` 生效，默认关，而且监督进程不会替你打开它。它在「配置」一节有完整说明。
 
 ## 配置
 
