@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -2100,6 +2101,90 @@ class SupervisorReattachTest(unittest.TestCase):
         third = self.supervisor(self.TASK, "--once")
         self.assertEqual(third.returncode, 0, third.stderr)
         self.assertIn("supervisor attached", third.stdout)
+
+    def test_signal_detaches_promptly_with_long_interval(self):
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(signal=signal.Signals(signum).name):
+                proc, out, err, handle_out, handle_err = self.spawn(self.TASK, "--interval", "30")
+                try:
+                    self.wait_text(out, "supervisor attached")
+                    started = time.monotonic()
+                    proc.send_signal(signum)
+                    try:
+                        code = proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=10)
+                        self.fail(
+                            f"{signal.Signals(signum).name} did not detach within 2s "
+                            "with --interval 30; stdout so far: "
+                            f"{out.read_text(encoding='utf-8')}"
+                        )
+                    elapsed = time.monotonic() - started
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+                        proc.wait(timeout=10)
+                    handle_out.close()
+                    handle_err.close()
+                self.assertEqual(code, 0, err.read_text(encoding="utf-8"))
+                self.assertLess(elapsed, 2.0, elapsed)
+                self.assertIn("supervisor detached", out.read_text(encoding="utf-8"))
+
+                # The observer lock must be free again: a fresh observer attaches.
+                again = self.supervisor(self.TASK, "--once")
+                self.assertEqual(again.returncode, 0, again.stderr)
+                self.assertIn("supervisor attached", again.stdout)
+
+    def test_ahp_flag_and_legacy_env_observe_ahp_tree_read_only(self):
+        # The same task tree is written in both layouts; choose the AHP tree
+        # either with --ahp or with CC_BRIDGE_LEGACY=0 in the observer's env.
+        event = {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess",
+            "cwd": str(self.cwd),
+            "tool_name": "Write",
+            "tool_use_id": "toolu_ahp",
+            "tool_input": {"file_path": str(self.cwd / "note.txt"), "content": "x"},
+        }
+        thread, box = self.hold_gate(event)
+        legacy_pending = self.pending_path("PreToolUse")
+        ahp_dir = self.bridge_dir / "ahp" / "tasks" / self.TASK
+        ahp_pending = [item for item in (ahp_dir / "pending").glob("*-tool.pre.json")
+                       if not item.name.endswith(".full.json")]
+        self.assertEqual(len(ahp_pending), 1, sorted(p.name for p in (ahp_dir / "pending").glob("*")))
+        ahp_pending = ahp_pending[0]
+        observed = {str(p.relative_to(ahp_dir)): p.read_bytes() for p in ahp_dir.rglob("*") if p.is_file()}
+        legacy_observed = self.snapshot()
+
+        with_flag = self.supervisor(self.TASK, "--once", "--ahp")
+        self.assertEqual(with_flag.returncode, 0, with_flag.stderr)
+        self.assertIn(f"pending {ahp_pending}", with_flag.stdout)
+        self.assertNotIn(f"pending {legacy_pending}", with_flag.stdout)
+
+        self.environ["CC_BRIDGE_LEGACY"] = "0"
+        try:
+            via_env = self.supervisor(self.TASK, "--once")
+        finally:
+            del self.environ["CC_BRIDGE_LEGACY"]
+        self.assertEqual(via_env.returncode, 0, via_env.stderr)
+        self.assertIn(f"pending {ahp_pending}", via_env.stdout)
+        self.assertNotIn(f"pending {legacy_pending}", via_env.stdout)
+
+        self.assertEqual({str(p.relative_to(ahp_dir)): p.read_bytes()
+                          for p in ahp_dir.rglob("*") if p.is_file()}, observed)
+        self.assertEqual(self.snapshot(), legacy_observed)
+        for tree in (ahp_dir, self.task_dir):
+            for name in ("replies", "acks"):
+                self.assertFalse((tree / name).exists() and any((tree / name).glob("*.json")), tree)
+            self.assertFalse((tree / "approvals.jsonl").exists(), tree)
+            self.assertFalse((tree / "status.json").exists(), tree)
+
+        seq = ahp_pending.name.split("-", 1)[0]
+        self.reply(seq, {"decision": "deny", "reason": "operator denied"})
+        thread.join(8)
+        self.assertFalse(thread.is_alive())
+        self.assertIn('"deny"', box["result"].stdout)
 
     def test_writes_commands_and_stop_are_not_auto_approved(self):
         sessions = [

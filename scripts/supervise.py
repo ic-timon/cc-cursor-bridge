@@ -18,6 +18,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -226,10 +227,10 @@ def parse_args(argv: list[str]) -> tuple[dict | None, str]:
 
 
 def monitor(task: str, opts: dict) -> int:
-    stop = {"flag": False}
+    stop = threading.Event()
 
     def handle_signal(signum, frame):  # noqa: ARG001 - signal handler signature
-        stop["flag"] = True
+        stop.set()
 
     previous = {}
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -271,7 +272,7 @@ def monitor(task: str, opts: dict) -> int:
                         print(entry, flush=True)
             if opts["once"]:
                 return EXIT_OK
-            if stop["flag"]:
+            if stop.is_set():
                 break
             delay = float(opts["interval"])
             if deadline is not None:
@@ -279,7 +280,8 @@ def monitor(task: str, opts: dict) -> int:
                 if remaining <= 0:
                     break
                 delay = min(delay, remaining)
-            time.sleep(max(0.0, delay))
+            # Event.wait is woken by the handler's set(); time.sleep would not be.
+            stop.wait(max(0.0, delay))
     finally:
         for signum, handler in previous.items():
             try:
