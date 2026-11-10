@@ -1909,6 +1909,280 @@ class AhpProducerTest(unittest.TestCase):
         self.assertEqual(self.approvals()[-1]["via"], "timeout")
 
 
+class SupervisorReattachTest(unittest.TestCase):
+    """scripts/supervise.py: detach/reattach, read-only, no auto-approval."""
+
+    OBSERVER = ROOT / "scripts" / "supervise.py"
+    TASK = "task1"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.home = self.root / "home"
+        self.home.mkdir()
+        self.bridge_dir = self.root / "bridge"
+        self.cwd = self.root / "work"
+        self.cwd.mkdir()
+        self.environ = {
+            "HOME": str(self.home),
+            "CC_BRIDGE_DIR": str(self.bridge_dir),
+            "CC_TASK_ID": self.TASK,
+            "PATH": os.environ.get("PATH", ""),
+        }
+        self.task_dir = self.bridge_dir / "tasks" / self.TASK
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def supervisor(self, *args, timeout=20):
+        return subprocess.run(
+            [sys.executable, str(self.OBSERVER), *args],
+            capture_output=True,
+            text=True,
+            env=self.environ,
+            timeout=timeout,
+            check=False,
+        )
+
+    def spawn(self, *args):
+        out = self.root / "observer.out"
+        err = self.root / "observer.err"
+        handle_out = out.open("w", encoding="utf-8")
+        handle_err = err.open("w", encoding="utf-8")
+        proc = subprocess.Popen(
+            [sys.executable, str(self.OBSERVER), *args],
+            stdout=handle_out,
+            stderr=handle_err,
+            text=True,
+            env=self.environ,
+        )
+        return proc, out, err, handle_out, handle_err
+
+    def wait_text(self, path: Path, needle: str, timeout=10):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            text = path.read_text(encoding="utf-8") if path.is_file() else ""
+            if needle in text:
+                return text
+            time.sleep(0.02)
+        self.fail(f"{needle!r} did not appear in {path}: "
+                  f"{path.read_text(encoding='utf-8') if path.is_file() else ''}")
+
+    def pending_path(self, event_name: str, timeout=10) -> Path:
+        pending = self.task_dir / "pending"
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            files = [item for item in pending.glob(f"*-{event_name}.json")
+                     if not item.name.endswith(".full.json")] if pending.is_dir() else []
+            if files:
+                return files[0]
+            time.sleep(0.02)
+        self.fail(f"no pending {event_name} appeared")
+
+    def reply(self, seq: str, body: dict):
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "bridge.py"),
+             "reply", self.TASK, str(seq), json.dumps(body)],
+            capture_output=True,
+            text=True,
+            env=self.environ,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def snapshot(self) -> dict:
+        if not self.task_dir.is_dir():
+            return {}
+        return {
+            str(path.relative_to(self.task_dir)): path.read_bytes()
+            for path in self.task_dir.rglob("*") if path.is_file()
+        }
+
+    def hold_gate(self, event: dict) -> tuple:
+        env = dict(self.environ, CC_BRIDGE_WAIT_ALL="1", CC_BRIDGE_WAIT_ALL_TIMEOUT="8")
+        box: dict = {}
+
+        def run():
+            box["result"] = bridge.handle_event(event, env)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        return thread, box
+
+    def test_detach_reattach_same_task_keeps_pending_and_manual_reply(self):
+        event = {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess",
+            "cwd": str(self.cwd),
+            "tool_name": "Write",
+            "tool_use_id": "toolu_reattach",
+            "tool_input": {"file_path": str(self.cwd / "note.txt"), "content": "x"},
+        }
+        thread, box = self.hold_gate(event)
+        pending = self.pending_path("PreToolUse")
+        seq = pending.name.split("-", 1)[0]
+        before = self.snapshot()
+
+        first = self.supervisor(self.TASK, "--for", "0.4", "--interval", "0.05")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertIn(f"pending {pending}", first.stdout)
+        self.assertIn("supervisor detached", first.stdout)
+        self.assertEqual(self.snapshot(), before)  # pending and seq untouched
+        self.assertFalse((self.task_dir / "replies").exists())
+        self.assertFalse((self.task_dir / "status.json").exists())
+
+        second = self.supervisor(self.TASK, "--for", "0.4", "--interval", "0.05")
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn(f"pending {pending}", second.stdout)
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse((self.task_dir / "replies").exists())
+
+        self.reply(seq, {"decision": "allow", "reason": "operator"})
+        thread.join(8)
+        self.assertFalse(thread.is_alive())
+        self.assertIn('"allow"', box["result"].stdout)
+        self.assertTrue((self.task_dir / "replies" / f"{seq}.json").is_file())
+        self.assertFalse(pending.exists())
+
+        third = self.supervisor(self.TASK, "--once")
+        self.assertEqual(third.returncode, 0, third.stderr)
+        self.assertNotIn(f"pending {self.task_dir}", third.stdout)
+        self.assertIn("status: missing", third.stdout)
+        self.assertNotIn(" ended", third.stdout)
+
+    def test_attach_when_already_ended_prints_terminal_summary(self):
+        bridge.handle_event(
+            {"hook_event_name": "SessionEnd", "session_id": "sess", "cwd": str(self.cwd),
+             "reason": "other"},
+            self.environ,
+        )
+        before = self.snapshot()
+        result = self.supervisor(self.TASK, "--once")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"task {self.TASK} ended", result.stdout)
+        self.assertIn("stop_accepted: null", result.stdout)
+        self.assertIn("reason: other", result.stdout)
+        self.assertIn("state: ended", result.stdout)
+        self.assertEqual(self.snapshot(), before)
+
+        manual = self.bridge_dir / "tasks" / "task2"
+        manual.mkdir(parents=True)
+        (manual / "status.json").write_text(json.dumps({
+            "state": "ended",
+            "ended_at": "2026-11-10T00:00:00.000+08:00",
+            "session_end_reason": "max_turns",
+            "stop_accepted": False,
+            "stop_seq": None,
+        }), encoding="utf-8")
+        summary = self.supervisor("task2", "--once")
+        self.assertEqual(summary.returncode, 0, summary.stderr)
+        self.assertIn("task task2 ended", summary.stdout)
+        self.assertIn("stop_accepted: false", summary.stdout)
+        self.assertIn("reason: max_turns", summary.stdout)
+
+    def test_concurrent_observer_rejected_and_lock_reusable(self):
+        proc, out, err, handle_out, handle_err = self.spawn(self.TASK, "--for", "6", "--interval", "0.05")
+        try:
+            self.wait_text(out, "supervisor attached")
+            second = self.supervisor(self.TASK, "--once")
+            self.assertEqual(second.returncode, 3)
+            self.assertIn("another observer is already attached", second.stderr)
+            self.assertIn("observer.lock", second.stderr)
+            self.assertFalse(self.task_dir.exists())  # observers never create task state
+        finally:
+            proc.terminate()
+            code = proc.wait(timeout=10)
+            handle_out.close()
+            handle_err.close()
+        self.assertEqual(code, 0, err.read_text(encoding="utf-8"))
+        self.assertIn("supervisor detached", out.read_text(encoding="utf-8"))
+
+        third = self.supervisor(self.TASK, "--once")
+        self.assertEqual(third.returncode, 0, third.stderr)
+        self.assertIn("supervisor attached", third.stdout)
+
+    def test_writes_commands_and_stop_are_not_auto_approved(self):
+        sessions = [
+            ("PreToolUse", {
+                "hook_event_name": "PreToolUse", "session_id": "sess", "cwd": str(self.cwd),
+                "tool_name": "Write", "tool_use_id": "toolu_write",
+                "tool_input": {"file_path": str(self.cwd / "x.txt"), "content": "x"},
+            }),
+            ("PermissionRequest", {
+                "hook_event_name": "PermissionRequest", "session_id": "sess", "cwd": str(self.cwd),
+                "tool_name": "Bash", "tool_use_id": "toolu_bash",
+                "tool_input": {"command": "echo hi"},
+            }),
+            ("Stop", {
+                "hook_event_name": "Stop", "session_id": "sess", "cwd": str(self.cwd),
+                "last_assistant_message": "done",
+            }),
+        ]
+        gates = []
+        pendings = []
+        for name, event in sessions:
+            thread, box = self.hold_gate(event)
+            gates.append((thread, box))
+            pendings.append(self.pending_path(name))
+        before = self.snapshot()
+
+        observed = self.supervisor(self.TASK, "--once")
+        self.assertEqual(observed.returncode, 0, observed.stderr)
+        for path in pendings:
+            self.assertIn(f"pending {path}", observed.stdout)
+        self.assertEqual(self.snapshot(), before)
+        for tree in (self.task_dir, self.bridge_dir / "ahp" / "tasks" / self.TASK):
+            self.assertFalse((tree / "replies").exists() and any((tree / "replies").glob("*.json")), tree)
+            self.assertFalse((tree / "acks").exists() and any((tree / "acks").glob("*.json")), tree)
+            self.assertFalse((tree / "approvals.jsonl").exists(), tree)
+            self.assertFalse((tree / "status.json").exists(), tree)
+
+        seqs = [path.name.split("-", 1)[0] for path in pendings]
+        self.reply(seqs[0], {"decision": "deny", "reason": "operator denied"})
+        self.reply(seqs[1], {"decision": "deny", "message": "operator denied"})
+        self.reply(seqs[2], {"ack": True})
+        for thread, _ in gates:
+            thread.join(8)
+            self.assertFalse(thread.is_alive())
+        self.assertIn('"deny"', gates[0][1]["result"].stdout)
+        self.assertIn('"deny"', gates[1][1]["result"].stdout)
+        self.assertEqual(gates[2][1]["result"].stdout, "")
+
+    def test_missing_and_malformed_status_are_not_terminal(self):
+        missing = self.supervisor(self.TASK, "--once")
+        self.assertEqual(missing.returncode, 0, missing.stderr)
+        self.assertIn("status: missing", missing.stdout)
+        self.assertNotIn("ended", missing.stdout)
+        self.assertFalse(self.task_dir.exists())  # a read-only observer creates nothing
+
+        self.task_dir.mkdir(parents=True)
+        status = self.task_dir / "status.json"
+        status.write_text("{not json", encoding="utf-8")
+        malformed = self.supervisor(self.TASK, "--once")
+        self.assertEqual(malformed.returncode, 0, malformed.stderr)
+        self.assertIn("status: unreadable", malformed.stdout)
+        self.assertNotIn("task task1 ended", malformed.stdout)
+
+        status.write_text(json.dumps({"state": "running"}), encoding="utf-8")
+        unknown = self.supervisor(self.TASK, "--once")
+        self.assertEqual(unknown.returncode, 0, unknown.stderr)
+        self.assertIn("status: unrecognized (state: running)", unknown.stdout)
+        self.assertNotIn("task task1 ended", unknown.stdout)
+
+    def test_usage_and_bad_task_id(self):
+        empty = self.supervisor()
+        self.assertEqual(empty.returncode, 2)
+        self.assertIn("usage:", empty.stderr)
+        help_text = self.supervisor("--help")
+        self.assertEqual(help_text.returncode, 0)
+        self.assertIn("bridge.py reply", help_text.stderr)
+        bad = self.supervisor("../evil", "--once")
+        self.assertEqual(bad.returncode, 2)
+        clash = self.supervisor(self.TASK, "--once", "--for", "1")
+        self.assertEqual(clash.returncode, 2)
+        self.assertFalse((self.bridge_dir / "evil").exists())
+
+
 class LaunchHelperTest(unittest.TestCase):
     """scripts/run_claude_bridged.sh argv. No claude binary."""
 
