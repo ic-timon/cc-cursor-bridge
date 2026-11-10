@@ -121,6 +121,12 @@ def terminal_summary(task: str, data: dict, ahp: bool) -> None:
     print(f"  reason: {plain(data.get('session_end_reason'))}")
     print(f"  ended_at: {plain(data.get('ended_at'))}")
     print(f"  stop_seq: {plain(data.get('stop_seq'))}")
+    if "success" in data:
+        print(f"  success: {plain(data.get('success'))}")
+    if "turn_status" in data:
+        print(f"  turn_status: {plain(data.get('turn_status'))}")
+    if data.get("error"):
+        print(f"  error: {plain(data.get('error'))}")
     if path is not None:
         print(f"  status_file: {path}")
 
