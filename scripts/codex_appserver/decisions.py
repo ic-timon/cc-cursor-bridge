@@ -151,6 +151,34 @@ def permissions_rejection() -> Tuple[str, Dict[str, Any]]:
     )
 
 
+def unsupported_approval_scope(params: dict) -> str | None:
+    """Return a reason if the request asks for a persistent or extra grant.
+
+    The adapter only supports one-shot command/fileChange allow|deny. Network
+    enables, extra filesystem grants, grantRoot, and policy amendments are
+    rejected without offering a durable grant path.
+    """
+    if not isinstance(params, dict):
+        return None
+    if params.get("grantRoot"):
+        return "grantRoot is not supported"
+    for key in ("proposedExecpolicyAmendment", "proposedNetworkPolicyAmendments",
+                "proposed_execpolicy_amendment", "proposed_network_policy_amendments"):
+        value = params.get(key)
+        if value:
+            return f"{key} is not supported"
+    extra = params.get("additionalPermissions") or params.get("permissions")
+    if isinstance(extra, dict) and extra:
+        network = extra.get("network") or {}
+        if isinstance(network, dict) and network.get("enabled"):
+            return "additional network permission is not supported"
+        fs = extra.get("fileSystem") or extra.get("filesystem") or {}
+        if fs:
+            return "additional filesystem permission is not supported"
+        return "additionalPermissions is not supported"
+    return None
+
+
 def timeout_decision() -> str:
     return "deny"
 

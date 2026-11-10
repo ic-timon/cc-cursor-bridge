@@ -90,8 +90,10 @@ is the controller write path.
 - Controller (this adapter process) death, stdin close, or disconnect:
   fail-closed. Pending approvals are declined or the turn is interrupted;
   the child app-server process group is terminated; `status.json` is
-  written with a truthful non-success state (`cancelled` / `failed` /
-  `interrupted`, never `completed` if the turn did not complete).
+  written with `state: "ended"` (the only terminal value `supervise.py`
+  recognizes), `success: false`, and a truthful `session_end_reason`
+  (`cancelled` / `failed`) plus `turn_status` when known. Never report
+  `turn_status: completed` or `success: true` if the turn did not complete.
 - SIGINT and SIGTERM are handled as controller cancellation. Stdio close
   here means the app-server transport; prompt EOF is normal input completion.
   SIGKILL and host failure cannot run cleanup or write a final status. An
@@ -115,13 +117,16 @@ cancel/interrupt ends the turn fail-closed.
 
 ## Status and logs
 
-- `<ahp-root>/tasks/<task>/status.json` — durable state. Use `ended`
-  only when the session finished; include `turn_status` from
-  `turn/completed` (`completed` | `interrupted` | `failed`) when known.
-  Do not report success if the turn was cancelled or failed.
+- `<ahp-root>/tasks/<task>/status.json` — durable state. Terminal
+  sessions always use `state: "ended"` so the existing supervisor can
+  detach; include `success`, `session_end_reason`, and `turn_status`
+  from `turn/completed` (`completed` | `interrupted` | `failed`) when
+  known. Do not report success if the turn was cancelled or failed.
   `success` is false and the CLI exits nonzero after a gate timeout, invalid
   reply, or unsupported request, even if a declined gate's turn subsequently
   completes. `last_gate` preserves the latest resolved gate outcome.
+  A pre-existing `replies/<seq>.json` is stashed before a new gate of
+  that seq is published, so a stale allow cannot authorize it.
 - `events.jsonl` — redacted audit log.
 - Optional `--jsonl` RPC transcript: secrets redacted; **token-usage
   metrics kept as numbers** (`inputTokens`, `totalTokens`, …). A key

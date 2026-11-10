@@ -17,6 +17,7 @@ from codex_appserver.decisions import (
     normalize_gate_decision,
     permissions_rejection,
     timeout_decision,
+    unsupported_approval_scope,
 )
 from codex_appserver.redact import REDACTED, redact, redact_text
 
@@ -59,6 +60,12 @@ class DecisionTest(unittest.TestCase):
         self.assertIn("message", err)
         with self.assertRaises(DecisionError):
             approval_result("item/permissions/requestApproval", "deny")
+
+    def test_unsupported_scope(self):
+        self.assertIsNone(unsupported_approval_scope({"command": "echo"}))
+        self.assertIn("grantRoot", unsupported_approval_scope({"grantRoot": "/tmp"}) or "")
+        self.assertIn("network", unsupported_approval_scope(
+            {"additionalPermissions": {"network": {"enabled": True}}}) or "")
 
     def test_unknown_and_unhandled_classes(self):
         self.assertEqual(classify_server_request("attestation/generate"), "unhandled")

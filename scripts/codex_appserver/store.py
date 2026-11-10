@@ -102,26 +102,47 @@ class Store:
         write_atomic(self.dir / "status.json", body)
         return body
 
+    def _stash_preexisting_reply(self, seq: int) -> None:
+        """A reply written before this gate was published must not approve it."""
+        path = self.dir / "replies" / f"{seq}.json"
+        if not path.is_file():
+            return
+        stamp = now_iso().replace(":", "").replace("+", "Z")
+        dest = self.dir / "replies" / f"{seq}.preexisting-{stamp}.json"
+        path.replace(dest)
+
     def open_gate(self, method: str, request_id: Any, params: dict) -> dict:
         kind = classify_server_request(method)
+        context_keys = (
+            "additionalPermissions", "networkApprovalContext", "availableDecisions",
+            "grantRoot", "proposedExecpolicyAmendment", "proposedNetworkPolicyAmendments",
+            "reason",
+        )
         native = {"method": method, "request_id": request_id,
                   "thread_id": params.get("threadId", params.get("conversationId")),
                   "turn_id": params.get("turnId"),
                   "item_id": params.get("itemId", params.get("callId")),
                   "approval_id": params.get("approvalId")}
+        for key in context_keys:
+            if key in params:
+                native[key] = params[key]
         if kind == "command":
             tool_input = {"command": params.get("command"), "cwd": params.get("cwd", str(self.cwd))}
         else:
             tool_input = {"changes": params.get("changes", params.get("fileChanges", params.get("file_changes", {})))}
+            if params.get("grantRoot") is not None:
+                tool_input["grantRoot"] = params.get("grantRoot")
         payload = {"tool_name": "commandExecution" if kind == "command" else "fileChange",
-                   "tool_input": tool_input}
+                   "tool_input": tool_input, "approval_context": {k: params[k] for k in context_keys if k in params}}
         if params.get("reason") is not None:
             payload["reason"] = params["reason"]
         env = self.envelope("permission.request", "gate", payload, native)
+        self._stash_preexisting_reply(env["seq"])
         env.update(reply_file=f"replies/{env['seq']}.json", deadline=now_iso(self.timeout_ms),
                    timeout_ms=self.timeout_ms, decisions=list(DECISIONS["permission.request"]),
                    default_decision=DEFAULT_DECISION["permission.request"])
-        append_line(self.dir / "state" / "codex-requests.jsonl", {"seq": env["seq"], **env["native"]})
+        append_line(self.dir / "state" / "codex-requests.jsonl", {"seq": env["seq"], **{k: env["native"].get(k)
+                    for k in ("method", "request_id", "thread_id", "turn_id", "item_id", "approval_id")}})
         write_atomic(self.dir / "pending" / f"{env['seq']}-permission.request.json", env)
         append_line(self.dir / "events.jsonl", env)
         return env

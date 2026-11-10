@@ -13,7 +13,7 @@ from ahp_cc import now_iso, write_atomic
 
 from . import __version__
 from .decisions import (approval_result, classify_server_request, jsonrpc_error_payload,
-                        permissions_rejection)
+                        permissions_rejection, unsupported_approval_scope)
 from .rpc import RPC, RPCError
 from .store import Store
 
@@ -128,6 +128,14 @@ class Session:
             if "changes" in item:
                 params["changes"] = item["changes"]
         env = self.store.open_gate(method, request_id, params)
+        scope = unsupported_approval_scope(params)
+        if scope:
+            self.store.finish_gate(env, "deny", "error", scope)
+            self.rpc.reply_result(request_id, approval_result(method, "deny", scope))
+            self.fail_closed = True
+            self.last_gate = {"seq": env["seq"], "decision": "deny", "via": "error", "reason": scope}
+            self._status("running", pending_seq=env["seq"])
+            return
         self.pending[key] = {"id": request_id, "method": method, "env": env,
                              "deadline": time.monotonic() + self.timeout_seconds}
         self._status("waiting", pending_seq=env["seq"])
@@ -262,22 +270,33 @@ class Session:
             if self.cancelled:
                 raise Cancelled("controller cancelled")
             final_state = "ended"
+            end_reason = "completed"
         except (Exception, KeyboardInterrupt) as exc:
             self.fail_closed = True
-            final_state = "cancelled" if isinstance(exc, (Cancelled, KeyboardInterrupt)) else "failed"
+            outcome = "cancelled" if isinstance(exc, (Cancelled, KeyboardInterrupt)) else "failed"
             error = str(exc) or type(exc).__name__
             self._abort(error)
             self.store.notice("producer.error", {"stage": "session", "message": error})
+            final_state = "ended"
+            end_reason = outcome
         finally:
             try:
                 if self.rpc:
                     self.rpc.close()
             finally:
                 try:
-                    success = final_state == "ended" and self.turn_status == "completed" and not self.fail_closed
-                    self.store.notice("session.end", {"reason": error or self.turn_status or final_state,
-                                                      "turn_status": self.turn_status, "tokenUsage": self.usage})
-                    result = self._status(final_state, success=success, error=error, ended_at=now_iso())
+                    end_reason = locals().get("end_reason") or (
+                        "completed" if self.turn_status == "completed" and not self.fail_closed else
+                        (self.turn_status or "failed")
+                    )
+                    success = (end_reason == "completed" and self.turn_status == "completed"
+                               and not self.fail_closed)
+                    self.store.notice("session.end", {"reason": error or end_reason,
+                                                      "turn_status": self.turn_status,
+                                                      "session_end_reason": end_reason,
+                                                      "tokenUsage": self.usage})
+                    result = self._status("ended", success=success, error=error, ended_at=now_iso(),
+                                          session_end_reason=end_reason)
                 finally:
                     self.store.close()
                     for sig, handler in handlers.items():

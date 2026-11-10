@@ -145,10 +145,14 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(env["default_decision"], "deny")
         self.assertEqual(env["payload"]["tool_name"], "commandExecution")
         self.assertEqual(env["payload"]["tool_input"]["cwd"], str(run.cwd))
-        self.assertEqual(env["native"], {"method": COMMAND, "request_id": "server-1", "thread_id": "thread-1",
-                                         "turn_id": "turn-1", "item_id": "item-1", "approval_id": "approval-1"})
+        identity = {"method": COMMAND, "request_id": "server-1", "thread_id": "thread-1",
+                    "turn_id": "turn-1", "item_id": "item-1", "approval_id": "approval-1"}
+        for key, value in identity.items():
+            self.assertEqual(env["native"][key], value)
+        self.assertEqual(env["native"].get("reason"), "fixture approval")
+        self.assertEqual((env["payload"].get("approval_context") or {}).get("reason"), "fixture approval")
         state = json.loads((run.task_dir / "state" / "codex-requests.jsonl").read_text())
-        self.assertEqual(state, {"seq": env["seq"], **env["native"]})
+        self.assertEqual(state, {"seq": env["seq"], **identity})
         caps = json.loads((run.task_dir / "capabilities.json").read_text())
         self.assertIn("x-codex-adapter", caps)
         run.reply(env, {"protocol": "ahp/1", "seq": env["seq"], "decision": "deny"})
@@ -208,7 +212,8 @@ class AdapterTests(unittest.TestCase):
         run.process.terminate()
         code, status, _ = run.finish()
         self.assertNotEqual(code, 0)
-        self.assertEqual(status["state"], "cancelled")
+        self.assertEqual(status["state"], "ended")
+        self.assertEqual(status.get("session_end_reason"), "cancelled")
         self.assertNotEqual(status["turn_status"], "completed")
         self.assertFalse(status["success"])
         self.assertEqual(run.ack(env)["applied_decision"], "deny")
@@ -220,7 +225,8 @@ class AdapterTests(unittest.TestCase):
         run = self.launch({"requests": [{"method": COMMAND}], "disconnect": True})
         code, status, _ = run.finish()
         self.assertNotEqual(code, 0)
-        self.assertEqual(status["state"], "failed")
+        self.assertEqual(status["state"], "ended")
+        self.assertEqual(status.get("session_end_reason"), "failed")
         self.assertNotEqual(status["turn_status"], "completed")
         self.assert_not_executed(run)
         self.assert_child_exited(run)
@@ -407,7 +413,8 @@ class AdapterTests(unittest.TestCase):
         env = run.pending()[0]
         code, status, _ = run.finish()
         self.assertNotEqual(code, 0)
-        self.assertEqual(status["state"], "failed")
+        self.assertEqual(status["state"], "ended")
+        self.assertFalse(status["success"])
         self.assertIn("whole turn timed out", status["error"])
         self.assertEqual(run.ack(env)["applied_decision"], "deny")
         self.assertTrue(run.received("turn/interrupt"))
@@ -451,6 +458,70 @@ class AdapterTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     Session(task_id="fixture", cwd=SCRIPTS, model=model, effort=effort,
                             timeout_seconds=timeout)
+
+    def test_preexisting_reply_does_not_authorize_later_gate(self) -> None:
+        temp = tempfile.TemporaryDirectory(prefix="codex-adapter-stale-")
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        replies = root / "ahp" / "tasks" / "fixture" / "replies"
+        replies.mkdir(parents=True)
+        # Plant stale allows against not-yet-published seqs. The first real gate
+        # must stash the matching file and wait for a post-publish deny.
+        for seq in range(1, 11):
+            write_atomic(replies / f"{seq}.json", {"decision": "allow"})
+        run = Run(root, {"requests": [{"method": COMMAND}]})
+        self.addCleanup(run.cleanup)
+        env = run.pending()[0]
+        seq = env["seq"]
+        self.assertFalse((run.task_dir / "replies" / f"{seq}.json").exists())
+        self.assertTrue(list(run.task_dir.glob(f"replies/{seq}.preexisting-*.json")))
+        run.reply(env, {"decision": "deny"})
+        code, status, _ = run.finish()
+        self.assertEqual(code, 0)
+        self.assertTrue(status.get("success", True))
+        self.assertEqual(run.ack(env)["applied_decision"], "deny")
+        self.assertEqual(run.ack(env)["via"], "reply")
+        self.assert_not_executed(run)
+
+    def test_approval_context_is_recorded_and_scope_extensions_are_denied(self) -> None:
+        params = {
+            "availableDecisions": ["accept", "acceptForSession", "cancel"],
+            "networkApprovalContext": {"host": "example.test", "reason": "fixture"},
+            "additionalPermissions": {"network": {"enabled": True}},
+            "grantRoot": "/tmp",
+            "proposedExecpolicyAmendment": ["echo"],
+        }
+        run = self.launch({"requests": [{"method": COMMAND, "params": params}]})
+        # Scope extensions are denied immediately; no allow path is offered.
+        code, status, _ = run.finish()
+        self.assertNotEqual(code, 0)
+        self.assertFalse(status["success"])
+        events = [json.loads(line) for line in (run.task_dir / "events.jsonl").read_text().splitlines()]
+        gates = [env for env in events if env.get("event") == "permission.request"]
+        self.assertTrue(gates)
+        ctx = gates[0]["payload"].get("approval_context") or {}
+        self.assertEqual(ctx.get("grantRoot"), "/tmp")
+        self.assertEqual(ctx.get("availableDecisions"), ["accept", "acceptForSession", "cancel"])
+        self.assertEqual((ctx.get("additionalPermissions") or {}).get("network"), {"enabled": True})
+        ack = json.loads(next((run.task_dir / "acks").glob("*.json")).read_text())
+        self.assertEqual(ack["applied_decision"], "deny")
+        self.assertIn("not supported", ack.get("reason", ""))
+        self.assert_not_executed(run)
+
+    def test_supervisor_treats_unsuccessful_end_as_terminal(self) -> None:
+        run = self.launch({"requests": [{"method": COMMAND}], "disconnect": True})
+        code, status, _ = run.finish()
+        self.assertEqual(status["state"], "ended")
+        self.assertFalse(status["success"])
+        env = dict(os.environ, CC_BRIDGE_AHP_DIR=str(run.root / "ahp"),
+                   CC_BRIDGE_DIR=str(run.root / "bridge"))
+        result = subprocess.run([sys.executable, str(SCRIPTS / "supervise.py"), "--ahp", "--once", "fixture"],
+                                capture_output=True, text=True, env=env, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("task fixture ended", result.stdout)
+        self.assertIn("state: ended", result.stdout)
+        self.assertIn("success: false", result.stdout)
+        self.assertIn("turn_status:", result.stdout)
 
 
 if __name__ == "__main__":
