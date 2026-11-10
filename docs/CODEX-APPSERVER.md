@@ -50,13 +50,20 @@ from the gate timeout. Both timeouts must be finite and positive.
   `allow` maps to one-shot Codex `accept`. `deny` and timeout map to
   `decline`. The command is not executed on deny, timeout, cancel, or
   disconnect.
-- `acceptForSession`, execpolicy amendments, network policy amendments,
-  and permission grants are rejected. An invalid reply is treated as
-  deny (fail-closed), not as a retry hook for a broader grant.
+- `acceptForSession`, execpolicy-amendment *replies*, network policy
+  amendments, and permission grants are rejected. An invalid reply is
+  treated as deny (fail-closed), not as a retry hook for a broader grant.
   A non-null `networkApprovalContext` is a managed-network approval prompt
   and is rejected immediately. When `availableDecisions` is advertised,
   it must include a one-shot `accept`/`allow` to permit an allow reply;
-  denial remains available regardless of that menu.
+  denial remains available regardless of that menu. Codex 0.167 often
+  attaches `proposedExecpolicyAmendment` and an
+  `acceptWithExecpolicyAmendment` menu entry to a sandbox-blocked
+  command; that proposal is audited and never applied. It does not by
+  itself fail a one-shot accept/deny when `accept` is also advertised.
+  The 2026-11-11 04:52 canary declined such a request before this
+  distinction was enforced; do not treat that run as proof of the
+  current menu/amendment policy.
 - Supported server requests: `item/commandExecution/requestApproval` and
   `item/fileChange/requestApproval` (plus legacy `execCommandApproval` /
   `applyPatchApproval`, mapped with the generated ReviewDecision `denied`

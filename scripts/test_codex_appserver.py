@@ -610,6 +610,43 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(run.finish()[0], 0)
         self.assertTrue(run.approvals()[0]["accepted"])
 
+    def test_proposed_execpolicy_amendment_keeps_one_shot_path(self) -> None:
+        params = {
+            "availableDecisions": [
+                "accept",
+                {"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["echo"]}},
+                "cancel",
+            ],
+            "proposedExecpolicyAmendment": ["echo"],
+        }
+        run = self.launch({"requests": [{"method": COMMAND, "params": params}]})
+        env = run.pending()[0]
+        self.assertEqual(env["decisions"], ["allow", "deny"])
+        self.assertEqual((env["payload"].get("approval_context") or {}).get("proposedExecpolicyAmendment"),
+                         ["echo"])
+        run.reply(env, {"decision": "deny", "reason": "one-shot-decline-ignores-amendment"})
+        code, status, _ = run.finish()
+        self.assertEqual(code, 0)
+        self.assertEqual(run.ack(env)["via"], "reply")
+        self.assertEqual(run.ack(env)["applied_decision"], "deny")
+        self.assertEqual(run.approvals()[0]["response"]["result"], {"decision": "decline"})
+        self.assert_not_executed(run)
+
+    def test_amendment_reply_is_rejected_on_one_shot_gate(self) -> None:
+        params = {
+            "availableDecisions": ["accept", "cancel"],
+            "proposedExecpolicyAmendment": ["echo"],
+        }
+        run = self.launch({"requests": [{"method": COMMAND, "params": params}]})
+        env = run.pending()[0]
+        run.reply(env, {"decision": "acceptWithExecpolicyAmendment",
+                        "acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["echo"]}})
+        code, status, _ = run.finish()
+        self.assertNotEqual(code, 0)
+        self.assertEqual(run.ack(env)["applied_decision"], "deny")
+        self.assertNotEqual(run.ack(env)["via"], "reply")
+        self.assert_not_executed(run)
+
     def test_scope_extensions_are_individually_recorded_and_denied(self) -> None:
         for params, reason in (
             ({"grantRoot": "/tmp"}, "grantRoot"),
@@ -617,8 +654,8 @@ class AdapterTests(unittest.TestCase):
             ({"additionalPermissions": {"fileSystem": {"write": ["/tmp"]}}}, "filesystem permission"),
             ({"permissions": {"network": {"enabled": True}}}, "network permission"),
             *[({key: ["echo"]}, key) for key in (
-                "proposedExecpolicyAmendment", "proposedNetworkPolicyAmendments",
-                "proposed_execpolicy_amendment", "proposed_network_policy_amendments")],
+                "proposedNetworkPolicyAmendments",
+                "proposed_network_policy_amendments")],
         ):
             with self.subTest(params=params):
                 self.assert_scope_denied(params, reason)

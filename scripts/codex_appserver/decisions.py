@@ -155,8 +155,9 @@ def unsupported_approval_scope(params: dict) -> str | None:
     """Return a reason if the request asks for a persistent or extra grant.
 
     The adapter only supports one-shot command/fileChange allow|deny. Network
-    enables, extra filesystem grants, grantRoot, and policy amendments are
-    rejected without offering a durable grant path.
+    enables, extra filesystem grants, grantRoot, and network policy amendments
+    are rejected without offering a durable grant path. A proposed execpolicy
+    amendment on the request is not itself a grant.
     """
     if not isinstance(params, dict):
         return None
@@ -164,8 +165,12 @@ def unsupported_approval_scope(params: dict) -> str | None:
         return "networkApprovalContext (managed-network approval) is not supported"
     if params.get("grantRoot"):
         return "grantRoot is not supported"
-    for key in ("proposedExecpolicyAmendment", "proposedNetworkPolicyAmendments",
-                "proposed_execpolicy_amendment", "proposed_network_policy_amendments"):
+    # A proposed execpolicy amendment is an optional alternative the real 0.167
+    # server often attaches to an otherwise one-shot command approval (menu still
+    # includes accept). Record it for audit; do not fail the one-shot path.
+    # Replies that apply the amendment remain forbidden. Network policy
+    # amendments are grants and stay rejected.
+    for key in ("proposedNetworkPolicyAmendments", "proposed_network_policy_amendments"):
         value = params.get(key)
         if value:
             return f"{key} is not supported"

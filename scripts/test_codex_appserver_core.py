@@ -80,11 +80,23 @@ class DecisionTest(unittest.TestCase):
             ({"permissions": {"filesystem": {"write": ["/tmp"]}}}, "filesystem permission"),
             ({"additionalPermissions": {"futureGrant": True}}, "additionalPermissions"),
             *[({key: ["echo"]}, key) for key in (
-                "proposedExecpolicyAmendment", "proposedNetworkPolicyAmendments",
-                "proposed_execpolicy_amendment", "proposed_network_policy_amendments")],
+                "proposedNetworkPolicyAmendments",
+                "proposed_network_policy_amendments")],
         ):
             with self.subTest(params=params):
                 self.assertIn(reason, unsupported_approval_scope(params) or "")
+
+    def test_proposed_execpolicy_amendment_is_not_itself_unsupported(self):
+        # Real 0.167 command approvals often include this proposal alongside
+        # a one-shot accept. It must not fail the one-shot path by itself.
+        self.assertIsNone(unsupported_approval_scope({
+            "command": "echo",
+            "proposedExecpolicyAmendment": ["/bin/bash", "-lc", "echo"],
+            "availableDecisions": ["accept", {"acceptWithExecpolicyAmendment": {
+                "execpolicy_amendment": ["echo"]}}, "cancel"],
+        }))
+        self.assertIsNone(unsupported_approval_scope({
+            "proposed_execpolicy_amendment": ["echo"]}))
 
     def test_available_decisions_only_allow_one_shot(self):
         self.assertEqual(decisions_for_approval({}), ["allow", "deny"])
